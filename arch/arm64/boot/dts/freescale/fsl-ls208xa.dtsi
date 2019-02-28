@@ -779,7 +779,10 @@
 			num-lanes = <8>;
 			bus-range = <0x0 0xff>;
 			msi-parent = <&its>;
-			iommu-map = <0 &smmu 0 1>;	/* This is fixed-up by u-boot */
+			msi-map = <0x100 &its 0 1>;
+			msi-map-mask = <0xffffffff>;
+			iommu-map = <0 &smmu 0 1>,
+			<0x100 &smmu 1 1>;
 			#interrupt-cells = <1>;
 			interrupt-map-mask = <0 0 0 7>;
 			interrupt-map = <0000 0 0 1 &gic 0 0 0 119 4>,
