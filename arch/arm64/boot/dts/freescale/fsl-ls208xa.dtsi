@@ -872,6 +872,13 @@
 			reg-names = "ftm", "pmctrl";
 			interrupts = <0 44 4>;
 		};
+
+		qcom,fsm-dp {
+			compatible = "qcom,fsm-dp";
+			qcom,ul-bufs = <16384 4096>;
+			qcom,rx-queue-size = <1024 1024 1024>;
+			dma-coherent;
+		};
 	};
 
 	ddr1: memory-controller@1080000 {

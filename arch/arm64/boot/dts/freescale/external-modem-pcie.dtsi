@@ -322,7 +322,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <4>;
 			mhi,chan-dir = <1>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 			mhi,db-mode-switch;
@@ -334,7 +334,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <5>;
 			mhi,chan-dir = <2>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 		};
@@ -411,7 +411,6 @@
 			mhi,priority = <1>;
 			mhi,brstmode = <3>;
 			mhi,hw-ev;
-			mhi,client-manage;
 		};
 
 		mhi_netdev_2: mhi_rmnet@0 {
@@ -740,7 +739,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <4>;
 			mhi,chan-dir = <1>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 			mhi,db-mode-switch;
@@ -752,7 +751,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <5>;
 			mhi,chan-dir = <2>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 		};
@@ -829,7 +828,6 @@
 			mhi,priority = <1>;
 			mhi,brstmode = <3>;
 			mhi,hw-ev;
-			mhi,client-manage;
 		};
 
 		mhi_netdev_4: mhi_rmnet@0 {
@@ -1158,7 +1156,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <4>;
 			mhi,chan-dir = <1>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 			mhi,db-mode-switch;
@@ -1170,7 +1168,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <5>;
 			mhi,chan-dir = <2>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 		};
@@ -1247,7 +1245,6 @@
 			mhi,priority = <1>;
 			mhi,brstmode = <3>;
 			mhi,hw-ev;
-			mhi,client-manage;
 		};
 
 		mhi_netdev_0: mhi_rmnet@0 {
@@ -1576,7 +1573,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <4>;
 			mhi,chan-dir = <1>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 			mhi,db-mode-switch;
@@ -1588,7 +1585,7 @@
 			mhi,num-elements = <512>;
 			mhi,event-ring = <5>;
 			mhi,chan-dir = <2>;
-			mhi,data-type = <1>;
+			mhi,data-type = <0>;
 			mhi,doorbell-mode = <3>;
 			mhi,ee = <0x4>;
 		};
@@ -1665,7 +1662,6 @@
 			mhi,priority = <1>;
 			mhi,brstmode = <3>;
 			mhi,hw-ev;
-			mhi,client-manage;
 		};
 
 		mhi_netdev_6: mhi_rmnet@0 {
