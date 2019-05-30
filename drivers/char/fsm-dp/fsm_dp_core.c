@@ -1,0 +1,615 @@
+/* Copyright (c) 2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/slab.h>
+#include <linux/dma-mapping.h>
+#include <linux/platform_device.h>
+#include <linux/of_device.h>
+
+#include "fsm_dp.h"
+
+#define DEFAULT_LOOPBACK_JOB_NUM 8192
+
+#ifdef CONFIG_FSM_DP_TEST
+
+#define DEFAULT_TEST_RING_SIZE 2048
+#define TEST_RING_MMAP_COOKIE	0x80000000
+
+static int fsm_dp_test_init(struct fsm_dp_drv *pdrv)
+{
+	int ret;
+
+	ret = fsm_dp_ring_init(&pdrv->test_ring.ring,
+			       DEFAULT_TEST_RING_SIZE,
+			       TEST_RING_MMAP_COOKIE);
+	return ret;
+}
+
+static void fsm_dp_test_cleanup(struct fsm_dp_drv *pdrv)
+{
+	fsm_dp_ring_cleanup(&pdrv->test_ring.ring);
+}
+#else
+static int fsm_dp_test_init(struct fsm_dp_drv *pdrv)
+{
+	return 0;
+}
+
+static void fsm_dp_test_cleanup(struct fsm_dp_drv *pdrv)
+{
+}
+#endif
+
+static void handle_rx_loopback(
+	struct fsm_dp_drv *drv,
+	struct fsm_dp_loopback_job *job)
+{
+	struct fsm_dp_msghdr *msghdr = job->data;
+	struct iovec iov;
+	int ret;
+
+	msghdr->type = FSM_DP_MSG_TYPE_LPBK_RSP;
+
+	iov.iov_base = job->data;
+	iov.iov_len = job->length;
+	ret = fsm_dp_tx(drv, &iov, 1, 0);
+	if (ret != 1) {
+		FSM_DP_ERROR("%s: failed to send response\n", __func__);
+		drv->loopback.stats.rx_err++;
+		goto free_rxbuf;
+	}
+
+	drv->loopback.stats.rx_cnt++;
+	return;
+
+free_rxbuf:
+	fsm_dp_mempool_put_buf(drv->mempool[FSM_DP_MEM_TYPE_UL], job->data);
+}
+
+static void handle_tx_loopback(
+	struct fsm_dp_drv *drv,
+	struct fsm_dp_loopback_job *job)
+{
+	struct fsm_dp_mempool *tx_mempool;
+	struct fsm_dp_mempool *mempool;
+	struct fsm_dp_rxqueue *rxq;
+	unsigned int offset;
+	void *dst;
+
+	tx_mempool = fsm_dp_find_mempool(drv, job->data, true);
+	if (tx_mempool == NULL) {
+		drv->loopback.stats.tx_drop++;
+		FSM_DP_DEBUG("%s: cannot to find source memory pool\n",
+			  __func__);
+		return;
+	}
+
+	if (!fsm_dp_rx_type_is_valid(job->dest)) {
+		drv->loopback.stats.tx_err++;
+		FSM_DP_ERROR("%s: invalid dest %u\n",
+			  __func__, job->dest);
+		goto free_txbuf;
+	}
+
+	rxq = &drv->rxq[job->dest];
+	mempool = drv->mempool[FSM_DP_MEM_TYPE_UL];
+	if (mempool == NULL) {
+		drv->loopback.stats.tx_err++;
+		FSM_DP_ERROR("%s: UL memory is not created\n", __func__);
+		goto free_txbuf;
+	}
+
+	dst = fsm_dp_mempool_get_buf(mempool);
+	if (dst == NULL) {
+		drv->loopback.stats.tx_err++;
+		FSM_DP_ERROR("%s: failed to get buffer\n", __func__);
+		goto free_txbuf;
+	}
+	memcpy(dst, job->data, job->length);
+	offset = vaddr_offset(dst, mempool->mem.loc.page_base);
+	if (fsm_dp_ring_write(&rxq->ring, offset)) {
+		drv->loopback.stats.tx_err++;
+		FSM_DP_ERROR("%s: rx enqueue failed!\n", __func__);
+		goto free_txbuf;
+	}
+
+	drv->loopback.stats.tx_cnt++;
+	wake_up(&rxq->wq);
+
+free_txbuf:
+	if (tx_mempool->type != FSM_DP_MEM_TYPE_DL_L1_DATA)
+		fsm_dp_mempool_put_buf(tx_mempool, job->data);
+}
+
+static void loopback_cb(struct work_struct *work)
+{
+	struct fsm_dp_loopback_task *task = container_of(work,
+				struct fsm_dp_loopback_task, work);
+	struct fsm_dp_drv *drv = container_of(task,
+				struct fsm_dp_drv, loopback);
+	struct list_head q;
+	struct fsm_dp_loopback_job *job;
+	unsigned long flags;
+
+	INIT_LIST_HEAD(&q);
+
+	task->stats.run++;
+	while (1) {
+		spin_lock_irqsave(&task->lock, flags);
+		list_splice_tail_init(&q, &task->free_q);
+		list_splice_tail_init(&task->job_q, &q);
+		spin_unlock_irqrestore(&task->lock, flags);
+
+		if (list_empty(&q))
+			break;
+		list_for_each_entry(job, &q, list) {
+			if (job->rx_loopback)
+				handle_rx_loopback(drv, job);
+			else
+				handle_tx_loopback(drv, job);
+		}
+	}
+}
+
+static int tx_loopback(
+	struct fsm_dp_drv *pdrv,
+	void *data,
+	unsigned int length)
+{
+	struct fsm_dp_loopback_task *task;
+	struct fsm_dp_mempool *mempool;
+	struct fsm_dp_loopback_job *job;
+	unsigned int dest = FSM_DP_RX_TYPE_LPBK;
+	unsigned long flags;
+
+	mempool = fsm_dp_find_mempool(pdrv, data, true);
+	if (mempool == NULL) {
+		FSM_DP_ERROR("%s: failed find memory pool\n", __func__);
+		return -EINVAL;
+	}
+
+	task = &pdrv->loopback;
+	spin_lock_irqsave(&task->lock, flags);
+	job = list_first_entry_or_null(&task->free_q,
+				       struct fsm_dp_loopback_job,
+				       list);
+	if (job) {
+		list_del(&job->list);
+		job->data = data;
+		job->length = length;
+		job->dest = dest;
+		job->rx_loopback = false;
+		list_add_tail(&job->list, &task->job_q);
+		task->stats.tx_enque++;
+	}
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	if (job == NULL) {
+		FSM_DP_DEBUG("%s: job queue is full!\n", __func__);
+		task->stats.tx_drop++;
+		return -EAGAIN;
+	}
+	if (queue_work_on(0, task->workq, &task->work))
+		task->stats.sched++;
+	return 0;
+}
+
+static int rx_loopback(
+	struct fsm_dp_drv *pdrv,
+	void *data,
+	unsigned int length)
+{
+	struct fsm_dp_loopback_task *task;
+	struct fsm_dp_loopback_job *job;
+	unsigned long flags;
+
+	task = &pdrv->loopback;
+	spin_lock_irqsave(&task->lock, flags);
+	job = list_first_entry_or_null(&task->free_q,
+				       struct fsm_dp_loopback_job,
+				       list);
+	if (job) {
+		list_del(&job->list);
+		job->data = data;
+		job->length = length;
+		job->rx_loopback = true;
+		list_add_tail(&job->list, &task->job_q);
+		task->stats.rx_enque++;
+	}
+	spin_unlock_irqrestore(&task->lock, flags);
+
+	if (job == NULL) {
+		FSM_DP_DEBUG("%s: job queue is full!\n", __func__);
+		task->stats.rx_drop++;
+		return -EAGAIN;
+	}
+	if (queue_work_on(0, task->workq, &task->work))
+		task->stats.sched++;
+	return 0;
+}
+
+static int fsm_dp_loopback_init(struct fsm_dp_loopback_task *task)
+{
+	struct fsm_dp_loopback_job *job;
+	struct workqueue_struct *wq;
+	unsigned int i, allocsz;
+
+	INIT_LIST_HEAD(&task->free_q);
+	INIT_LIST_HEAD(&task->job_q);
+
+	wq = alloc_workqueue("fsm_loopback", WQ_MEM_RECLAIM, 0);
+	if (wq == NULL) {
+		FSM_DP_ERROR("%s: failed to allocate workqueue\n", __func__);
+		return -ENOMEM;
+	}
+
+	allocsz = DEFAULT_LOOPBACK_JOB_NUM * sizeof(struct fsm_dp_loopback_job);
+	job = kzalloc(allocsz, GFP_KERNEL);
+	if (IS_ERR(job)) {
+		FSM_DP_ERROR("%s: failed to allocate memory\n", __func__);
+		destroy_workqueue(wq);
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < DEFAULT_LOOPBACK_JOB_NUM; i++)
+		list_add_tail(&job[i].list, &task->free_q);
+
+	spin_lock_init(&task->lock);
+	INIT_WORK(&task->work, loopback_cb);
+	task->alloc_ptr = job;
+	task->workq = wq;
+	task->inited = true;
+	return 0;
+}
+
+static void fsm_dp_loopback_cleanup(struct fsm_dp_loopback_task *task)
+{
+	unsigned long flags;
+
+	if (task->inited) {
+		cancel_work_sync(&task->work);
+		destroy_workqueue(task->workq);
+		spin_lock_irqsave(&task->lock, flags);
+		INIT_LIST_HEAD(&task->free_q);
+		INIT_LIST_HEAD(&task->job_q);
+		spin_unlock_irqrestore(&task->lock, flags);
+		kfree(task->alloc_ptr);
+		task->alloc_ptr = NULL;
+		task->inited = false;
+	}
+}
+
+static int fsm_dp_rxqueue_init(
+	struct fsm_dp_rxqueue *rxq,
+	enum fsm_dp_rx_type rx_type,
+	unsigned int size)
+{
+	unsigned int ring_size;
+	int ret;
+
+	if (!fsm_dp_rx_type_is_valid(rx_type))
+		return -EINVAL;
+
+	if (rxq->inited) {
+		FSM_DP_ERROR("%s: rx queue already initialized!\n", __func__);
+		return -EAGAIN;
+	}
+
+	ring_size = calc_ring_size(size);
+	if (!ring_size)
+		return -EINVAL;
+
+	ret = fsm_dp_ring_init(&rxq->ring, ring_size, MMAP_RX_COOKIE(rx_type));
+	if (ret) {
+		FSM_DP_DEBUG("%s: failed to initialize rx ring!\n", __func__);
+		return ret;
+	}
+
+	init_waitqueue_head(&rxq->wq);
+	rxq->type = rx_type,
+	rxq->inited = true;
+
+	return 0;
+}
+
+static void fsm_dp_rxqueue_cleanup(struct fsm_dp_rxqueue *rxq)
+{
+	if (rxq->inited) {
+		wake_up(&rxq->wq);
+		fsm_dp_ring_cleanup(&rxq->ring);
+		rxq->inited = false;
+	}
+}
+
+void fsm_dp_rx(struct fsm_dp_drv *pdrv, void *addr, unsigned int length)
+{
+	struct fsm_dp_mempool *mempool;
+	struct fsm_dp_rxqueue *rxq;
+	struct fsm_dp_msghdr *msghdr;
+	unsigned int offset;
+
+	if (unlikely(pdrv == NULL || addr == NULL || !length)) {
+		FSM_DP_ERROR("%s: invalid argument\n", __func__);
+		return;
+	}
+
+	mempool = fsm_dp_find_mempool(pdrv, addr, false);
+	if (mempool == NULL) {
+		FSM_DP_DEBUG("%s: not UL address, addr=%p\n",
+			  __func__, addr);
+		return;
+	}
+
+	msghdr = (struct fsm_dp_msghdr *)addr;
+	if (msghdr->length != length - sizeof(*msghdr)) {
+		FSM_DP_DEBUG("%s: length mismatch, payload=%u total=%u\n",
+			     __func__, msghdr->length, length);
+		pdrv->stats.rx_badmsg++;
+		goto free_rxbuf;
+	}
+
+	switch (msghdr->type) {
+	case FSM_DP_MSG_TYPE_LPBK_REQ:
+		if (rx_loopback(pdrv, addr, length))
+			goto free_rxbuf;
+		goto done;
+	case FSM_DP_MSG_TYPE_LPBK_RSP:
+		rxq = &pdrv->rxq[FSM_DP_RX_TYPE_LPBK];
+		break;
+	case FSM_DP_MSG_TYPE_L1:
+		rxq = &pdrv->rxq[FSM_DP_RX_TYPE_L1];
+		break;
+	case FSM_DP_MSG_TYPE_RF:
+		rxq = &pdrv->rxq[FSM_DP_RX_TYPE_RF];
+		break;
+	default:
+		FSM_DP_DEBUG("%s: unsupport msg type(%u)\n",
+			     __func__, msghdr->type);
+		goto free_rxbuf;
+	}
+
+	offset = vaddr_offset(addr, mempool->mem.loc.page_base);
+	if (fsm_dp_ring_write(&rxq->ring, offset)) {
+		FSM_DP_ERROR("%s: failed to enqueue rx packet\n", __func__);
+		goto free_rxbuf;
+	}
+	wake_up(&rxq->wq);
+done:
+	pdrv->stats.rx_cnt++;
+	return;
+free_rxbuf:
+	pdrv->stats.rx_drop++;
+	fsm_dp_mempool_put_buf(mempool, addr);
+}
+
+static int fsm_dp_rx_init(struct fsm_dp_drv *pdrv)
+{
+	struct device_node *of_node = pdrv->dev->of_node;
+	const __be32 *of_prop = NULL;
+	const void *prop = NULL;
+	unsigned int len = 0, type;
+	int ret;
+
+	prop = of_get_property(of_node, "qcom,ul-bufs", &len);
+	if (prop && len == (sizeof(unsigned int) * 2))
+		of_prop = prop;
+
+	pdrv->mempool[FSM_DP_MEM_TYPE_UL] = fsm_dp_mempool_alloc(
+		pdrv,
+		FSM_DP_MEM_TYPE_UL,
+		(of_prop) ?
+		be32_to_cpu(of_prop[0]) :
+		DEFAULT_FSM_MEM_BUF_SIZE,
+		(of_prop) ?
+		be32_to_cpu(of_prop[1]) :
+		DEFAULT_FSM_MEM_UL_BUF_CNT);
+	if (pdrv->mempool[FSM_DP_MEM_TYPE_UL] == NULL) {
+		FSM_DP_ERROR("%s: failed to allocate UL memory pool!\n",
+			  __func__);
+		return -ENOMEM;
+	}
+
+	of_prop = NULL;
+	prop = of_get_property(of_node, "qcom,rx-queue-size", &len);
+	if (prop && len == (sizeof(unsigned int) * FSM_DP_RX_TYPE_LAST))
+		of_prop = prop;
+	for (type = 0; type < FSM_DP_RX_TYPE_LAST; type++) {
+		ret = fsm_dp_rxqueue_init(&pdrv->rxq[type], type,
+			(of_prop) ?
+			be32_to_cpu(of_prop[type]) :
+			DEFAULT_RX_QUEUE_SIZE);
+		if (ret) {
+			FSM_DP_ERROR("%s: failed to init rxqueue!\n", __func__);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static void fsm_dp_rx_cleanup(struct fsm_dp_drv *pdrv)
+{
+	unsigned int type;
+
+	fsm_dp_mempool_free(pdrv->mempool[FSM_DP_MEM_TYPE_UL]);
+
+	for (type = 0; type < FSM_DP_RX_TYPE_LAST; type++)
+		fsm_dp_rxqueue_cleanup(&pdrv->rxq[type]);
+}
+
+int fsm_dp_tx(
+	struct fsm_dp_drv *pdrv,
+	struct iovec *iov,
+	unsigned int iov_nr,
+	unsigned int flag)
+{
+	enum MHI_FLAGS mhi_flag = MHI_EOT;
+	int ret, n;
+
+	if (unlikely(!pdrv || !iov || !iov_nr))
+		return -EINVAL;
+
+	if (unlikely(flag & FSM_DP_TX_FLAG_LOOPBACK)) {
+		for (n = 0; n < iov_nr; n++) {
+			ret = tx_loopback(pdrv,
+					  iov[n].iov_base,
+					  iov[n].iov_len);
+			if (ret) {
+				pdrv->stats.tx_err++;
+				return ret;
+			}
+			pdrv->stats.tx_cnt++;
+		}
+		return n;
+	}
+
+	if (!fsm_dp_mhi_is_ready(&pdrv->mhi)) {
+		FSM_DP_ERROR("%s: mhi is not ready!\n", __func__);
+		pdrv->stats.tx_err++;
+		return -EIO;
+	}
+
+	if (flag & FSM_DP_TX_FLAG_SG) {
+		if (iov_nr > FSM_DP_MAX_SG_IOV_SIZE) {
+			FSM_DP_ERROR("%s: sg iov size too big!\n", __func__);
+			return -EINVAL;
+		}
+		mhi_flag = MHI_CHAIN;
+	}
+	for (n = 0; n < iov_nr; n++) {
+		ret = fsm_dp_mhi_tx(&pdrv->mhi,
+				    iov[n].iov_base,
+				    iov[n].iov_len,
+				    (n == iov_nr - 1) ? MHI_EOT : mhi_flag);
+		if (ret) {
+			pdrv->stats.tx_err++;
+			break;
+		}
+	}
+
+	if (!(flag & FSM_DP_TX_FLAG_SG))
+		pdrv->stats.tx_cnt += n;
+	else if (n == iov_nr)
+		pdrv->stats.tx_cnt++;
+
+	return n;
+}
+
+static int fsm_dp_core_init(struct fsm_dp_drv *pdrv)
+{
+	struct device *dev = pdrv->dev;
+	int ret;
+
+	spin_lock_init(&pdrv->mempool_lock);
+
+	of_dma_configure(dev, dev->of_node);
+
+	ret = fsm_dp_rx_init(pdrv);
+	if (ret)
+		goto exit;
+
+	ret = fsm_dp_loopback_init(&pdrv->loopback);
+	if (ret)
+		goto exit;
+
+	ret = fsm_dp_test_init(pdrv);
+
+exit:
+	of_node_put(dev->of_node);
+	return ret;
+}
+
+static void fsm_dp_core_cleanup(struct fsm_dp_drv *pdrv)
+{
+	fsm_dp_rx_cleanup(pdrv);
+	fsm_dp_loopback_cleanup(&pdrv->loopback);
+	fsm_dp_test_cleanup(pdrv);
+	kfree(pdrv);
+}
+
+static int __init fsm_dp_probe(struct platform_device *pdev)
+{
+	struct fsm_dp_drv *pdrv;
+	int ret;
+
+	pr_info("FSM-DP: probing FSM\n");
+
+	pdrv = kzalloc(sizeof(*pdrv), GFP_KERNEL);
+	if (IS_ERR(pdrv))
+		return -ENOMEM;
+
+	pdrv->dev = &pdev->dev;
+
+	ret = fsm_dp_core_init(pdrv);
+	if (ret)
+		goto cleanup;
+
+	ret = fsm_dp_mhi_init(pdrv);
+	if (ret)
+		goto cleanup;
+
+	ret = fsm_dp_cdev_init(pdrv);
+	if (ret)
+		goto cleanup_mhi;
+
+	ret = fsm_dp_debugfs_init(pdrv);
+	if (ret)
+		goto cleanup_cdev;
+
+	platform_set_drvdata(pdev, pdrv);
+	pr_info("FSM-DP: module initialized now\n");
+	return 0;
+
+cleanup_cdev:
+	fsm_dp_cdev_cleanup(pdrv);
+cleanup_mhi:
+	fsm_dp_mhi_cleanup(pdrv);
+cleanup:
+	fsm_dp_core_cleanup(pdrv);
+	pr_err("FSM-DP: module init failed!\n");
+	return ret;
+}
+
+static int __exit fsm_dp_remove(struct platform_device *pdev)
+{
+	struct fsm_dp_drv *pdrv = platform_get_drvdata(pdev);
+
+	if (pdrv) {
+		fsm_dp_cdev_cleanup(pdrv);
+		fsm_dp_mhi_cleanup(pdrv);
+		fsm_dp_debugfs_cleanup(pdrv);
+		fsm_dp_core_cleanup(pdrv);
+	}
+
+	return 0;
+}
+
+static const struct of_device_id fsm_dp_of_table[] = {
+	{ .compatible = "qcom,fsm-dp" },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, fsm_dp_of_table);
+
+static struct platform_driver __fsm_dp_platform_drv = {
+	.probe	= fsm_dp_probe,
+	.remove	= fsm_dp_remove,
+	.driver	= {
+		.name		= KBUILD_MODNAME,
+		.of_match_table	= fsm_dp_of_table,
+	},
+};
+
+module_platform_driver(__fsm_dp_platform_drv);
+MODULE_LICENSE("GPL v2");
+MODULE_DESCRIPTION("FSM DP driver");
