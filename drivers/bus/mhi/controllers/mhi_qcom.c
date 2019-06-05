@@ -577,6 +577,25 @@ error_iommu_init:
 	return ret;
 }
 
+static void mhi_pci_remove(struct pci_dev *pci_dev)
+{
+	struct mhi_controller *mhi_cntrl = NULL;
+	u32 domain = pci_domain_nr(pci_dev->bus);
+	u32 bus = pci_dev->bus->number;
+	u32 dev_id = pci_dev->device;
+	u32 slot = PCI_SLOT(pci_dev->devfn);
+
+	/* find a matching controller */
+	mhi_cntrl = mhi_bdf_to_controller(domain, bus, slot, dev_id);
+	if (!mhi_cntrl)
+		return;
+
+	mhi_power_down(mhi_cntrl, true);
+	mhi_deinit_pci_dev(mhi_cntrl);
+	mhi_arch_iommu_deinit(mhi_cntrl);
+	mhi_arch_pcie_deinit(mhi_cntrl);
+}
+
 static const struct dev_pm_ops pm_ops = {
 	SET_RUNTIME_PM_OPS(mhi_runtime_suspend,
 			   mhi_runtime_resume,
@@ -600,6 +619,7 @@ static struct pci_driver mhi_pcie_driver = {
 	.name = "mhi",
 	.id_table = mhi_pcie_device_id,
 	.probe = mhi_pci_probe,
+	.remove = mhi_pci_remove,
 	.driver = {
 		.pm = &pm_ops
 	}
