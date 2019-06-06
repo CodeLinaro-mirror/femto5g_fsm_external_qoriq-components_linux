@@ -529,7 +529,9 @@ int mhi_pci_probe(struct pci_dev *pci_dev,
 	if (IS_ERR(mhi_cntrl))
 		return PTR_ERR(mhi_cntrl);
 
+	mhi_cntrl->dev_id = pci_dev->device;
 	mhi_dev = mhi_controller_get_devdata(mhi_cntrl);
+	mhi_dev->pci_dev = pci_dev;
 	mhi_dev->powered_on = true;
 
 	ret = mhi_arch_pcie_init(mhi_cntrl);
