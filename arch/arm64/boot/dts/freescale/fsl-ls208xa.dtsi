@@ -911,6 +911,13 @@
 		little-endian;
 	};
 
+	pps {
+		gpios = <&gpio3 18 0>;
+		assert-falling-edge;
+		compatible = "pps-gpio";
+		status = "okay";
+	};
+
 	firmware {
 		optee {
 			compatible = "linaro,optee-tz";
