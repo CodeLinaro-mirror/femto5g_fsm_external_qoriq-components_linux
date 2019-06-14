@@ -12,6 +12,10 @@
 #ifndef __FSM_DP__
 #define __FSM_DP__
 
+#ifndef __KERNEL__
+#define __KERNEL__
+#endif
+
 #include <linux/mutex.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
