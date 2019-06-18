@@ -13,7 +13,11 @@
 #define __FSM_DP_IOCTL_H__
 
 #include <linux/types.h>
+#ifdef __KERNEL__
 #include <linux/uio.h>
+#else
+#include <sys/uio.h>
+#endif
 
 #define FSM_DP_MAX_IOV_SIZE	64
 #define FSM_DP_MAX_SG_IOV_SIZE	8

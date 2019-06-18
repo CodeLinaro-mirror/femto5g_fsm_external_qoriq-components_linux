@@ -121,6 +121,7 @@ static void handle_tx_loopback(
 	if (fsm_dp_ring_write(&rxq->ring, offset)) {
 		drv->loopback.stats.tx_err++;
 		FSM_DP_ERROR("%s: rx enqueue failed!\n", __func__);
+		fsm_dp_mempool_put_buf(mempool, dst);
 		goto free_txbuf;
 	}
 
