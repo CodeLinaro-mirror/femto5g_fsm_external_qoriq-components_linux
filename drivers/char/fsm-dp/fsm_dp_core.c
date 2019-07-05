@@ -171,6 +171,7 @@ static int tx_loopback(
 	struct fsm_dp_loopback_task *task;
 	struct fsm_dp_mempool *mempool;
 	struct fsm_dp_loopback_job *job;
+	struct fsm_dp_msghdr *msghdr = data;
 	unsigned int dest = FSM_DP_RX_TYPE_LPBK;
 	unsigned long flags;
 
@@ -178,6 +179,20 @@ static int tx_loopback(
 	if (mempool == NULL) {
 		FSM_DP_ERROR("%s: failed find memory pool\n", __func__);
 		return -EINVAL;
+	}
+
+	switch (msghdr->type) {
+	case FSM_DP_MSG_TYPE_L1:
+		dest = FSM_DP_RX_TYPE_L1;
+		break;
+	case FSM_DP_MSG_TYPE_RF:
+		dest = FSM_DP_RX_TYPE_RF;
+		break;
+	case FSM_DP_MSG_TYPE_TA:
+		dest = FSM_DP_RX_TYPE_TA;
+		break;
+	default:
+		break;
 	}
 
 	task = &pdrv->loopback;
@@ -373,6 +388,9 @@ void fsm_dp_rx(struct fsm_dp_drv *pdrv, void *addr, unsigned int length)
 		break;
 	case FSM_DP_MSG_TYPE_RF:
 		rxq = &pdrv->rxq[FSM_DP_RX_TYPE_RF];
+		break;
+	case FSM_DP_MSG_TYPE_TA:
+		rxq = &pdrv->rxq[FSM_DP_RX_TYPE_TA];
 		break;
 	default:
 		FSM_DP_DEBUG("%s: unsupport msg type(%u)\n",

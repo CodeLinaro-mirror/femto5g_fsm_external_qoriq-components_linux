@@ -70,6 +70,7 @@ enum fsm_dp_mmap_type {
 enum fsm_dp_rx_type {
 	FSM_DP_RX_TYPE_L1,
 	FSM_DP_RX_TYPE_RF,
+	FSM_DP_RX_TYPE_TA,
 	FSM_DP_RX_TYPE_LPBK,
 	FSM_DP_RX_TYPE_LAST,
 };
@@ -77,6 +78,7 @@ enum fsm_dp_rx_type {
 enum fsm_dp_msg_type {
 	FSM_DP_MSG_TYPE_L1		= 0,
 	FSM_DP_MSG_TYPE_RF		= 1,
+	FSM_DP_MSG_TYPE_TA		= 2,
 	FSM_DP_MSG_TYPE_LPBK_REQ	= 0xFE,
 	FSM_DP_MSG_TYPE_LPBK_RSP	= 0xFF,
 };
@@ -173,6 +175,7 @@ static inline const char *fsm_dp_rx_type_to_str(enum fsm_dp_rx_type type)
 	switch (type) {
 	case FSM_DP_RX_TYPE_L1: return "L1";
 	case FSM_DP_RX_TYPE_RF: return "RF";
+	case FSM_DP_RX_TYPE_TA: return "TA";
 	case FSM_DP_RX_TYPE_LPBK: return "LOOPBACK";
 	default: return "unknown";
 	}
