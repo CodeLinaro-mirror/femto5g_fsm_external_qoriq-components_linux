@@ -326,6 +326,12 @@ int mhi_init_dev_ctxt(struct mhi_controller *mhi_cntrl)
 
 		er_ctxt->intmodc = 0;
 		er_ctxt->intmodt = mhi_event->intmod;
+		if (mhi_event->intmod) {
+			er_ctxt->intmodt = er_ctxt->intmodt & 0xffff;
+			er_ctxt->intmodc =  (mhi_event->intmod) >> 16;
+			if (mhi_event->mhi_chan)
+				mhi_event->mhi_chan->intmod = mhi_event->intmod;
+		}
 		er_ctxt->ertype = MHI_ER_TYPE_VALID;
 		er_ctxt->msivec = mhi_event->msi;
 		mhi_event->db_cfg.db_mode = true;
