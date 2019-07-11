@@ -94,12 +94,14 @@ static int __cdev_tx(
 	unsigned int flag = 0;
 
 	FSM_DP_DEBUG("%s: iov_nr=%u\n", __func__, iov_nr);
+	if (iov_nr > FSM_DP_MAX_IOV_SIZE)
+		return  -E2BIG;
+
+	if (copy_from_user(iov, (void __user *)uiov,
+				   sizeof(struct iovec) * iov_nr))
+		return -EFAULT;
 
 	for (n = 0; n < iov_nr; n++) {
-		if (copy_from_user(&iov[n],
-				   (void __user *)&uiov[n],
-				   sizeof(struct iovec)))
-			return -EFAULT;
 		mempool_vma = find_mempool_vma(cdev,
 					       iov[n].iov_base,
 					       iov[n].iov_len);
