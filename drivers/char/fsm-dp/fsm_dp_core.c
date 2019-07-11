@@ -124,7 +124,7 @@ static void handle_tx_loopback(
 	}
 	memcpy(dst, job->data, job->length);
 	offset = vaddr_offset(dst, mempool->mem.loc.page_base);
-	if (fsm_dp_ring_write(&rxq->ring, offset)) {
+	if (fsm_dp_ring_write(&rxq->ring, offset, 0)) {
 		drv->loopback.stats.tx_err++;
 		FSM_DP_ERROR("%s: rx enqueue failed!\n", __func__);
 		fsm_dp_mempool_put_buf(mempool, dst);
@@ -411,7 +411,7 @@ void fsm_dp_rx(struct fsm_dp_drv *pdrv, void *addr, unsigned int length)
 	}
 
 	offset = vaddr_offset(addr, mempool->mem.loc.page_base);
-	if (fsm_dp_ring_write(&rxq->ring, offset)) {
+	if (fsm_dp_ring_write(&rxq->ring, offset, 0)) {
 		FSM_DP_ERROR("%s: failed to enqueue rx packet\n", __func__);
 		goto free_rxbuf;
 	}

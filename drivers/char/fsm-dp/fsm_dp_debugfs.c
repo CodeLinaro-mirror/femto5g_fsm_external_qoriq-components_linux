@@ -424,7 +424,7 @@ static int debugfs_ring_opstats_read(struct seq_file *s, void *unused)
 }
 DEFINE_DEBUGFS_OPS(debugfs_ring_opstats, debugfs_ring_opstats_read, NULL);
 
-static fsm_dp_ring_element_t __ring_index[FSM_DP_MEM_TYPE_LAST];
+unsigned long __ring_index[FSM_DP_MEM_TYPE_LAST];
 
 static int debugfs_ring_index_read(struct seq_file *s, void *unused)
 {
@@ -468,11 +468,11 @@ static int debugfs_ring_data_read(struct seq_file *s, void *unused)
 		*((struct fsm_dp_mempool **)s->private);
 
 	if (mempool) {
-		fsm_dp_ring_element_t val;
+		fsm_dp_ring_element_t *elem_p;
 
-		val = *(mempool->ring.element + __ring_index[mempool->type]);
+		elem_p = (mempool->ring.element + __ring_index[mempool->type]);
 
-		seq_printf(s, "%lu\n", val);
+		seq_printf(s, "%lu\n", elem_p->element_data);
 	}
 	return 0;
 }
