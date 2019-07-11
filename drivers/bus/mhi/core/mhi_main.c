@@ -155,7 +155,6 @@ void mhi_db_brstmode_disable(struct mhi_controller *mhi_cntrl,
 void mhi_ring_er_db(struct mhi_event *mhi_event)
 {
 	struct mhi_ring *ring = &mhi_event->ring;
-
 	mhi_event->db_cfg.process_db(mhi_event->mhi_cntrl, &mhi_event->db_cfg,
 				     ring->db_addr, *ring->ctxt_wp);
 }
@@ -432,6 +431,64 @@ map_error:
 	return ret;
 }
 
+int mhi_gen_n_tre(struct mhi_controller *mhi_cntrl,
+		struct mhi_chan *mhi_chan,
+		void *buf_array[],
+		void *cb_array[],
+		size_t buf_len_array[],
+		enum MHI_FLAGS flags_array[],
+		unsigned int num)
+{
+	struct mhi_ring *buf_ring, *tre_ring;
+	struct mhi_tre *mhi_tre;
+	struct mhi_buf_info *buf_info;
+	int eot, eob, chain, bei;
+	int ret;
+	void *save_tre_wp;
+	void *save_buf_wp;
+	int i;
+
+	buf_ring = &mhi_chan->buf_ring;
+	tre_ring = &mhi_chan->tre_ring;
+	save_tre_wp = buf_ring->wp;
+	save_buf_wp = tre_ring->wp;
+
+	i = 0;
+	while (num-- > 0) {
+		buf_info = buf_ring->wp;
+		buf_info->v_addr = buf_array[i];
+		buf_info->cb_buf = cb_array[i];
+		buf_info->wp = tre_ring->wp;
+		buf_info->dir = mhi_chan->dir;
+		buf_info->len = buf_len_array[i];
+		if (mhi_chan->dir == DMA_TO_DEVICE)
+			buf_info->wake_put = (num == 0); /* last or not*/
+		ret = mhi_cntrl->map_single(mhi_cntrl, buf_info);
+		if (ret) {
+			buf_ring->wp = save_tre_wp;
+			tre_ring->wp = save_buf_wp;
+			return ret;
+		}
+
+		eob = !!(flags_array[i] & MHI_EOB);
+		eot = !!(flags_array[i] & MHI_EOT);
+		chain = !!(flags_array[i] & MHI_CHAIN);
+		bei = !!(mhi_chan->intmod);
+
+		mhi_tre = tre_ring->wp;
+		mhi_tre->ptr = MHI_TRE_DATA_PTR(buf_info->p_addr);
+		mhi_tre->dword[0] = MHI_TRE_DATA_DWORD0(buf_len_array[i]);
+		mhi_tre->dword[1] = MHI_TRE_DATA_DWORD1(bei, eot, eob, chain);
+
+		/* increment WP */
+		mhi_add_ring_element(mhi_cntrl, tre_ring);
+		mhi_add_ring_element(mhi_cntrl, buf_ring);
+		i++;
+	}
+
+	return 0;
+}
+
 int mhi_gen_tre(struct mhi_controller *mhi_cntrl,
 		struct mhi_chan *mhi_chan,
 		void *buf,
@@ -454,6 +511,8 @@ int mhi_gen_tre(struct mhi_controller *mhi_cntrl,
 	buf_info->wp = tre_ring->wp;
 	buf_info->dir = mhi_chan->dir;
 	buf_info->len = buf_len;
+	if (mhi_chan->dir == DMA_TO_DEVICE)
+		buf_info->wake_put = true;
 
 	ret = mhi_cntrl->map_single(mhi_cntrl, buf_info);
 	if (ret)
@@ -480,37 +539,11 @@ int mhi_gen_tre(struct mhi_controller *mhi_cntrl,
 	return 0;
 }
 
-int mhi_queue_buf(struct mhi_device *mhi_dev,
-		  struct mhi_chan *mhi_chan,
-		  void *buf,
-		  size_t len,
-		  enum MHI_FLAGS mflags)
+bool mhi_deliver_bufs(struct mhi_controller *mhi_cntrl,
+		  struct mhi_chan *mhi_chan)
 {
-	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
-	struct mhi_ring *tre_ring;
 	unsigned long flags;
 	bool assert_wake = false;
-	int ret;
-
-	/*
-	 * this check here only as a guard, it's always
-	 * possible mhi can enter error while executing rest of function,
-	 * which is not fatal so we do not need to hold pm_lock
-	 */
-	if (unlikely(MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state))) {
-		MHI_VERB("MHI is not in active state, pm_state:%s\n",
-			 to_mhi_pm_state_str(mhi_cntrl->pm_state));
-
-		return -EIO;
-	}
-
-	tre_ring = &mhi_chan->tre_ring;
-	if (mhi_is_ring_full(mhi_cntrl, tre_ring))
-		return -ENOMEM;
-
-	ret = mhi_chan->gen_tre(mhi_cntrl, mhi_chan, buf, buf, len, mflags);
-	if (unlikely(ret))
-		return ret;
 
 	read_lock_irqsave(&mhi_cntrl->pm_lock, flags);
 
@@ -539,11 +572,91 @@ int mhi_queue_buf(struct mhi_device *mhi_dev,
 		read_unlock_irqrestore(&mhi_chan->lock, flags);
 	}
 
-	if (mhi_chan->dir == DMA_FROM_DEVICE && assert_wake)
+	if (mhi_chan->dir == DMA_FROM_DEVICE && assert_wake) {
 		mhi_cntrl->wake_put(mhi_cntrl, true);
+		assert_wake = false;
+	}
 
 	read_unlock_irqrestore(&mhi_cntrl->pm_lock, flags);
+	return assert_wake;
+}
 
+int mhi_queue_n_buf_not_supported(struct mhi_device *mhi_dev,
+		  struct mhi_chan *mhi_chan,
+		  void *buf_array[],
+		  size_t len_array[],
+		  enum MHI_FLAGS mflags_array[],
+		  unsigned int num)
+{
+	return -EPERM;
+}
+
+int mhi_queue_n_buf(struct mhi_device *mhi_dev,
+		  struct mhi_chan *mhi_chan,
+		  void *buf_array[],
+		  size_t len_array[],
+		  enum MHI_FLAGS mflags_array[],
+		  unsigned int num)
+{
+	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
+	struct mhi_ring *tre_ring;
+	int ret;
+
+	/*
+	 * this check here only as a guard, it's always
+	 * possible mhi can enter error while executing rest of function,
+	 * which is not fatal so we do not need to hold pm_lock
+	 */
+	if (unlikely(MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state))) {
+		MHI_VERB("MHI is not in active state, pm_state:%s\n",
+			 to_mhi_pm_state_str(mhi_cntrl->pm_state));
+
+		return -EIO;
+	}
+
+	tre_ring = &mhi_chan->tre_ring;
+	if (get_nr_avail_ring_elements(mhi_cntrl, tre_ring) < num)
+		return -ENOMEM;
+
+	ret = mhi_chan->gen_n_tre(mhi_cntrl, mhi_chan, buf_array,
+				buf_array, len_array, mflags_array, num);
+	if (unlikely(ret))
+		return ret;
+	mhi_deliver_bufs(mhi_cntrl, mhi_chan);
+	return 0;
+}
+
+int mhi_queue_buf(struct mhi_device *mhi_dev,
+		  struct mhi_chan *mhi_chan,
+		  void *buf,
+		  size_t len,
+		  enum MHI_FLAGS mflags)
+{
+	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
+	struct mhi_ring *tre_ring;
+	int ret;
+
+	/*
+	 * this check here only as a guard, it's always
+	 * possible mhi can enter error while executing rest of function,
+	 * which is not fatal so we do not need to hold pm_lock
+	 */
+	if (unlikely(MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state))) {
+		MHI_VERB("MHI is not in active state, pm_state:%s\n",
+			 to_mhi_pm_state_str(mhi_cntrl->pm_state));
+
+		return -EIO;
+	}
+
+	tre_ring = &mhi_chan->tre_ring;
+	if (mhi_is_ring_full(mhi_cntrl, tre_ring))
+		return -ENOMEM;
+
+	ret = mhi_chan->gen_tre(mhi_cntrl, mhi_chan, buf, buf, len, mflags);
+	if (unlikely(ret))
+		return ret;
+
+	mhi_deliver_bufs(mhi_cntrl, mhi_chan);
 	return 0;
 }
 
@@ -670,6 +783,7 @@ void mhi_create_devices(struct mhi_controller *mhi_cntrl)
 			mhi_dev->ul_chan = mhi_chan;
 			mhi_dev->ul_chan_id = mhi_chan->chan;
 			mhi_dev->ul_xfer = mhi_chan->queue_xfer;
+			mhi_dev->ul_n_xfer = mhi_chan->queue_n_xfer;
 			mhi_dev->ul_event_id = mhi_chan->er_index;
 			break;
 		case DMA_NONE:
@@ -680,6 +794,7 @@ void mhi_create_devices(struct mhi_controller *mhi_cntrl)
 			mhi_dev->dl_chan = mhi_chan;
 			mhi_dev->dl_chan_id = mhi_chan->chan;
 			mhi_dev->dl_xfer = mhi_chan->queue_xfer;
+			mhi_dev->dl_n_xfer = mhi_chan->queue_n_xfer;
 			mhi_dev->dl_event_id = mhi_chan->er_index;
 		}
 
@@ -694,12 +809,14 @@ void mhi_create_devices(struct mhi_controller *mhi_cntrl)
 					mhi_dev->ul_chan = mhi_chan;
 					mhi_dev->ul_chan_id = mhi_chan->chan;
 					mhi_dev->ul_xfer = mhi_chan->queue_xfer;
+					mhi_dev->ul_n_xfer = mhi_chan->queue_n_xfer;
 					mhi_dev->ul_event_id =
 						mhi_chan->er_index;
 				} else {
 					mhi_dev->dl_chan = mhi_chan;
 					mhi_dev->dl_chan_id = mhi_chan->chan;
 					mhi_dev->dl_xfer = mhi_chan->queue_xfer;
+					mhi_dev->dl_n_xfer = mhi_chan->queue_n_xfer;
 					mhi_dev->dl_event_id =
 						mhi_chan->er_index;
 				}
@@ -778,13 +895,15 @@ static int parse_xfer_event(struct mhi_controller *mhi_cntrl,
 		/* local rp */
 		local_rp = tre_ring->rp;
 		while (local_rp != dev_rp) {
+			bool wake_put;
+
 			buf_info = buf_ring->rp;
 			/* if it's last tre get len from the event */
 			if (local_rp == ev_tre)
 				xfer_len = MHI_TRE_GET_EV_LEN(event);
 			else
 				xfer_len = buf_info->len;
-
+			wake_put = buf_info->wake_put;
 			mhi_cntrl->unmap_single(mhi_cntrl, buf_info);
 
 			result.buf_addr = buf_info->cb_buf;
@@ -796,7 +915,8 @@ static int parse_xfer_event(struct mhi_controller *mhi_cntrl,
 			/* notify client */
 			mhi_chan->xfer_cb(mhi_chan->mhi_dev, &result);
 
-			if (mhi_chan->dir == DMA_TO_DEVICE) {
+			if (mhi_chan->dir == DMA_TO_DEVICE &&
+				wake_put) {
 				read_lock_bh(&mhi_cntrl->pm_lock);
 				mhi_cntrl->wake_put(mhi_cntrl, false);
 				read_unlock_bh(&mhi_cntrl->pm_lock);
@@ -808,6 +928,7 @@ static int parse_xfer_event(struct mhi_controller *mhi_cntrl,
 			 * dropping the packet
 			 */
 			if (mhi_chan->pre_alloc) {
+
 				if (mhi_queue_buf(mhi_chan->mhi_dev, mhi_chan,
 						  buf_info->cb_buf,
 						  buf_info->len, MHI_EOT)) {
@@ -1015,6 +1136,7 @@ int mhi_process_ctrl_ev_ring(struct mhi_controller *mhi_cntrl,
 
 	return count;
 }
+
 
 int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 				struct mhi_event *mhi_event,

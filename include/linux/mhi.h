@@ -324,6 +324,10 @@ struct mhi_device {
 		       size_t, enum MHI_FLAGS);
 	int (*dl_xfer)(struct mhi_device *, struct mhi_chan *, void *,
 		       size_t, enum MHI_FLAGS);
+	int (*ul_n_xfer)(struct mhi_device *, struct mhi_chan *, void **,
+		       size_t *, enum MHI_FLAGS *, unsigned int);
+	int (*dl_n_xfer)(struct mhi_device *, struct mhi_chan *, void **,
+		       size_t *, enum MHI_FLAGS *, unsigned int);
 	void (*status_cb)(struct mhi_device *, enum MHI_CB);
 };
 
@@ -411,6 +415,21 @@ static inline int mhi_queue_transfer(struct mhi_device *mhi_dev,
 	else
 		return mhi_dev->dl_xfer(mhi_dev, mhi_dev->dl_chan, buf, len,
 					mflags);
+}
+
+static inline int mhi_queue_n_transfer(struct mhi_device *mhi_dev,
+				     enum dma_data_direction dir,
+				     void **buf_array,
+				     size_t *len_array,
+				     enum MHI_FLAGS *mflags_array,
+				     unsigned int num)
+{
+	if (dir == DMA_TO_DEVICE)
+		return mhi_dev->ul_n_xfer(mhi_dev, mhi_dev->ul_chan,
+				buf_array, len_array, mflags_array, num);
+	else
+		return mhi_dev->dl_n_xfer(mhi_dev, mhi_dev->dl_chan,
+				buf_array, len_array, mflags_array, num);
 }
 
 static inline void *mhi_controller_get_devdata(struct mhi_controller *mhi_cntrl)

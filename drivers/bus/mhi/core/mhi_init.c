@@ -921,16 +921,22 @@ static int of_parse_ch_cfg(struct mhi_controller *mhi_cntrl,
 		case MHI_XFER_BUFFER:
 			mhi_chan->gen_tre = mhi_gen_tre;
 			mhi_chan->queue_xfer = mhi_queue_buf;
+			mhi_chan->gen_n_tre = mhi_gen_n_tre;
+			mhi_chan->queue_n_xfer = mhi_queue_n_buf;
 			break;
 		case MHI_XFER_SKB:
 			mhi_chan->queue_xfer = mhi_queue_skb;
+			mhi_chan->queue_n_xfer = mhi_queue_n_buf_not_supported;
 			break;
 		case MHI_XFER_SCLIST:
 			mhi_chan->gen_tre = mhi_gen_tre;
+			mhi_chan->gen_n_tre = mhi_gen_n_tre;
 			mhi_chan->queue_xfer = mhi_queue_sclist;
+			mhi_chan->queue_n_xfer = mhi_queue_n_buf_not_supported;
 			break;
 		case MHI_XFER_NOP:
 			mhi_chan->queue_xfer = mhi_queue_nop;
+			mhi_chan->queue_n_xfer = mhi_queue_n_buf_not_supported;
 			break;
 		default:
 			goto error_chan_cfg;

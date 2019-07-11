@@ -485,8 +485,12 @@ int fsm_dp_tx(
 	unsigned int iov_nr,
 	unsigned int flag)
 {
-	enum MHI_FLAGS mhi_flag = MHI_EOT;
+	enum MHI_FLAGS mhi_flag[FSM_DP_MAX_SG_IOV_SIZE];
+	size_t msg_len[FSM_DP_MAX_SG_IOV_SIZE];
+	void *msg_buf[FSM_DP_MAX_SG_IOV_SIZE];
 	int ret, n;
+	unsigned int num, to_send;
+	int j;
 
 	if (unlikely(!pdrv || !iov || !iov_nr))
 		return -EINVAL;
@@ -516,22 +520,38 @@ int fsm_dp_tx(
 			FSM_DP_ERROR("%s: sg iov size too big!\n", __func__);
 			return -EINVAL;
 		}
-		mhi_flag = MHI_CHAIN;
 	}
-	for (n = 0; n < iov_nr; n++) {
-		ret = fsm_dp_mhi_tx(&pdrv->mhi,
-				    iov[n].iov_base,
-				    iov[n].iov_len,
-				    (n == iov_nr - 1) ? MHI_EOT : mhi_flag);
+
+	to_send = 0;
+	for (n = 0, to_send = iov_nr; to_send > 0; ) {
+		if (to_send > FSM_DP_MAX_SG_IOV_SIZE)
+			num = FSM_DP_MAX_SG_IOV_SIZE;
+		else
+			num = to_send;
+		for (j = 0; j < num; j++) {
+			if ((flag & FSM_DP_TX_FLAG_SG) && n != (iov_nr - 1))
+				mhi_flag[j] = MHI_CHAIN;
+			else
+				mhi_flag[j] =  MHI_EOT;
+			msg_len[j] = iov[n].iov_len;
+			msg_buf[j] = iov[n].iov_base;
+			n++;
+		}
+		ret = fsm_dp_mhi_n_tx(&pdrv->mhi,
+				    msg_buf,
+				    msg_len,
+				    mhi_flag,
+				    num);
 		if (ret) {
 			pdrv->stats.tx_err++;
 			break;
 		}
+		to_send -= num;
 	}
 
 	if (!(flag & FSM_DP_TX_FLAG_SG))
-		pdrv->stats.tx_cnt += n;
-	else if (n == iov_nr)
+		pdrv->stats.tx_cnt += (iov_nr - to_send);
+	else if (!to_send)
 		pdrv->stats.tx_cnt++;
 
 	return n;

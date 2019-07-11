@@ -545,6 +545,10 @@ struct mhi_buf_info {
 	size_t len;
 	void *cb_buf;
 	enum dma_data_direction dir;
+	bool wake_put;	/*
+			 * for DMA_TO_DEVICE only. Flag to indicate
+			 * to wake_put when this xfer is done.
+			 */
 };
 
 struct mhi_event {
@@ -594,8 +598,12 @@ struct mhi_chan {
 	/* functions that generate the transfer ring elements */
 	int (*gen_tre)(struct mhi_controller *, struct mhi_chan *, void *,
 		       void *, size_t, enum MHI_FLAGS);
+	int (*gen_n_tre)(struct mhi_controller *, struct mhi_chan *, void **,
+		       void **, size_t *, enum MHI_FLAGS *, unsigned int);
 	int (*queue_xfer)(struct mhi_device *, struct mhi_chan *, void *,
 			  size_t, enum MHI_FLAGS);
+	int (*queue_n_xfer)(struct mhi_device *, struct mhi_chan *, void **,
+			  size_t *, enum MHI_FLAGS *, unsigned int);
 	/* xfer call back */
 	struct mhi_device *mhi_dev;
 	void (*xfer_cb)(struct mhi_device *, struct mhi_result *);
@@ -676,8 +684,17 @@ int __mhi_device_get_sync(struct mhi_controller *mhi_cntrl);
 /* queue transfer buffer */
 int mhi_gen_tre(struct mhi_controller *mhi_cntrl, struct mhi_chan *mhi_chan,
 		void *buf, void *cb, size_t buf_len, enum MHI_FLAGS flags);
+int mhi_gen_n_tre(struct mhi_controller *mhi_cntrl, struct mhi_chan *mhi_chan,
+		void **buf_array, void **cb_array, size_t *buf_len_array,
+		enum MHI_FLAGS *flags_array, unsigned int num);
 int mhi_queue_buf(struct mhi_device *mhi_dev, struct mhi_chan *mhi_chan,
 		  void *buf, size_t len, enum MHI_FLAGS mflags);
+int mhi_queue_n_buf(struct mhi_device *mhi_dev, struct mhi_chan *mhi_chan,
+		void **buf_array, size_t *len_array,
+		enum MHI_FLAGS *mflags_array, unsigned int num);
+int mhi_queue_n_buf_not_supported(struct mhi_device *mhi_dev,
+		struct mhi_chan *mhi_chan, void **buf_array, size_t *len_array,
+		enum MHI_FLAGS *mflags_array, unsigned int num);
 int mhi_queue_skb(struct mhi_device *mhi_dev, struct mhi_chan *mhi_chan,
 		  void *buf, size_t len, enum MHI_FLAGS mflags);
 int mhi_queue_sclist(struct mhi_device *mhi_dev, struct mhi_chan *mhi_chan,

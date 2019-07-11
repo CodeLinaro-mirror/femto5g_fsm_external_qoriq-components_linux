@@ -42,6 +42,24 @@ void fsm_dp_mhi_cleanup(struct fsm_dp_drv *pdrv);
 
 int fsm_dp_mhi_rx_replenish(struct fsm_dp_drv *drv);
 
+static inline int fsm_dp_mhi_n_tx(struct fsm_dp_mhi *mhi,
+				void *msg_array[],
+				size_t msglen_array[],
+				enum MHI_FLAGS flag_array[], unsigned int num)
+{
+	int ret;
+
+	ret = mhi_queue_n_transfer(mhi->mhi_dev,
+				 DMA_TO_DEVICE,
+				 msg_array, msglen_array,
+				 flag_array, num);
+	if (!ret)
+		mhi->stats.tx_cnt += num;
+	else
+		mhi->stats.tx_err += num;
+	return ret;
+}
+
 static inline int fsm_dp_mhi_tx(struct fsm_dp_mhi *mhi,
 				void *msg,
 				unsigned int msglen,
