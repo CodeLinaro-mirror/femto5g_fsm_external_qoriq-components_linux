@@ -22,6 +22,7 @@
 #include <linux/workqueue.h>
 #include <linux/device.h>
 #include <linux/cdev.h>
+#include <linux/netdevice.h>
 #include <linux/atomic.h>
 #include <linux/workqueue.h>
 
@@ -163,6 +164,8 @@ struct fsm_dp_core_stats {
 	unsigned long rx_cnt;
 	unsigned long rx_badmsg;
 	unsigned long rx_drop;
+	unsigned long rx_int;
+	unsigned long rx_budget_overflow;
 };
 
 struct fsm_dp_drv {
@@ -170,6 +173,8 @@ struct fsm_dp_drv {
 	struct class *dev_class;
 	struct fsm_dp_mhi mhi;
 	struct cdev cdev;
+	struct net_device dummy_dev;
+	struct napi_struct napi;
 	struct mutex cdev_lock;
 	struct list_head cdev_head;
 	spinlock_t mempool_lock;
@@ -178,6 +183,7 @@ struct fsm_dp_drv {
 	struct fsm_dp_rxqueue rxq[FSM_DP_RX_TYPE_LAST];
 	struct fsm_dp_loopback_task loopback;
 	struct fsm_dp_core_stats stats;
+	struct work_struct alloc_work;
 
 #ifdef CONFIG_FSM_DP_TEST
 	struct fsm_dp_test_ring test_ring;

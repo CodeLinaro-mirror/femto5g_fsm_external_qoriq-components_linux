@@ -594,6 +594,8 @@ static int debugfs_drv_status_show(struct seq_file *s, void *unused)
 	seq_printf(s, "RX:             %lu\n", stats->rx_cnt);
 	seq_printf(s, "RX_BADMSG:      %lu\n", stats->rx_badmsg);
 	seq_printf(s, "RX_DROP:        %lu\n", stats->rx_drop);
+	seq_printf(s, "RX_INT:         %lu\n", stats->rx_int);
+	seq_printf(s, "RX_BUDGET_OVF:  %lu\n", stats->rx_budget_overflow);
 	return 0;
 }
 DEFINE_DEBUGFS_OPS(debugfs_drv_status, debugfs_drv_status_show, NULL);

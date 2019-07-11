@@ -515,6 +515,15 @@ int mhi_get_no_free_descriptors(struct mhi_device *mhi_dev,
 				enum dma_data_direction dir);
 
 /**
+ * mhi_get_total_descriptors - Get transfer ring length
+ * Get total # of TD  to queue buffers
+ * @mhi_dev: Device associated with the channels
+ * @dir: Direction of the channel
+ */
+int mhi_get_total_descriptors(struct mhi_device *mhi_dev,
+				enum dma_data_direction dir);
+
+/**
  * mhi_poll - poll for any available data to consume
  * This is only applicable for DL direction
  * @mhi_dev: Device associated with the channels

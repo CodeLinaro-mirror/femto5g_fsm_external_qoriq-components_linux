@@ -29,6 +29,9 @@ static int __mhi_rx_replenish(
 	int ret, i, to_xfer;
 	bool outofbuf;
 
+	ret = 0;
+	if (nr < mhi_get_total_descriptors(mhi_dev, DMA_FROM_DEVICE) / 8)
+		return ret;
 	for (; nr > 0;) {
 		to_xfer = min(FSM_DP_MAX_IOV_SIZE, nr);
 		outofbuf = false;
@@ -62,12 +65,14 @@ static int __mhi_rx_replenish(
 			return ret;
 		}
 		mhi->stats.rx_replenish++;
-		if (outofbuf)
+		if (outofbuf) {
+			ret = -ENOMEM;
 			break;
+		}
 		nr -= to_xfer;
 	}
 
-	return 0;
+	return ret;
 }
 
 static void __mhi_ul_xfer_cb(
@@ -125,26 +130,34 @@ static void __mhi_dl_xfer_cb(
 		fsm_dp_mempool_put_buf(mempool, result->buf_addr);
 	} else {
 		mhi->stats.rx_cnt++;
-		mhi->num_recv_till_replenish++;
 		fsm_dp_rx(drv, result->buf_addr, result->bytes_xferd);
 	}
-	if (mhi->num_recv_till_replenish >=  FSM_DP_MAX_IOV_SIZE &&
-				__mhi_rx_replenish(mhi, mempool) == 0)
-		mhi->num_recv_till_replenish = 0;
-
 }
 
 static void __mhi_status_cb(struct mhi_device *mhi_dev, enum MHI_CB mhi_cb)
 {
-	FSM_DP_DEBUG("%s: mhi_cb=%u\n", __func__, mhi_cb);
+
+	struct fsm_dp_drv *pdrv = mhi_device_get_devdata(mhi_dev);
+
+	if (mhi_cb != MHI_CB_PENDING_DATA)
+		return;
+	if (napi_schedule_prep(&pdrv->napi)) {
+		__napi_schedule(&pdrv->napi);
+		pdrv->stats.rx_int++;
+		return;
+	}
 }
 
 int fsm_dp_mhi_rx_replenish(struct fsm_dp_drv *drv)
 {
 	struct fsm_dp_mhi *mhi = &drv->mhi;
 	struct fsm_dp_mempool *mempool = drv->mempool[FSM_DP_MEM_TYPE_UL];
+	int ret;
 
-	return __mhi_rx_replenish(mhi, mempool);
+	spin_lock_bh(&mhi->rx_lock);
+	ret = __mhi_rx_replenish(mhi, mempool);
+	spin_unlock_bh(&mhi->rx_lock);
+	return ret;
 }
 
 
@@ -171,7 +184,8 @@ static int fsm_dp_mhi_probe(
 	pdrv->mhi.mhi_dev = mhi_dev;
 	for (i = 0; i < FSM_DP_MAX_IOV_SIZE; i++)
 		pdrv->mhi.flag_array[i] = MHI_EOT;
-	pdrv->mhi.num_recv_till_replenish = 0;
+	spin_lock_init(&pdrv->mhi.rx_lock);
+	spin_lock_init(&pdrv->mhi.tx_lock);
 	ret = fsm_dp_mhi_rx_replenish(pdrv);
 	if (ret) {
 		FSM_DP_ERROR("%s: fsm_dp_mhi_rx_replenish failed\n", __func__);
