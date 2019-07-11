@@ -35,6 +35,17 @@ struct fsm_dp_mhi_stats {
 struct fsm_dp_mhi {
 	struct mhi_device *mhi_dev;
 	struct fsm_dp_mhi_stats stats;
+
+	/*
+	 * the following are for needed storage
+	 * for doing replenish at context of
+	 * of fsm_dp_mhi_rx_replenish callback.
+	 * No locking is necessary.
+	 */
+	unsigned int num_recv_till_replenish;
+	void *buf_array[FSM_DP_MAX_IOV_SIZE];
+	size_t size_array[FSM_DP_MAX_IOV_SIZE];
+	enum MHI_FLAGS flag_array[FSM_DP_MAX_IOV_SIZE];
 };
 
 int fsm_dp_mhi_init(struct fsm_dp_drv *pdrv);

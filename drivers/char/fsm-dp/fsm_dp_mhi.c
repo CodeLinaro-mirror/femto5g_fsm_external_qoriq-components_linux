@@ -26,28 +26,45 @@ static int __mhi_rx_replenish(
 	struct mhi_device *mhi_dev = mhi->mhi_dev;
 	int nr = mhi_get_no_free_descriptors(mhi_dev, DMA_FROM_DEVICE);
 	void *buf;
-	int ret, i;
+	int ret, i, to_xfer;
+	bool outofbuf;
 
-	for (i = 0; i < nr; i++) {
-		buf = fsm_dp_mempool_get_buf(mempool);
-		if (buf == NULL) {
-			mhi->stats.rx_out_of_buf++;
-			FSM_DP_DEBUG("%s: out of rx buffer!\n", __func__);
-			return -ENOMEM;
+	for (; nr > 0;) {
+		to_xfer = min(FSM_DP_MAX_IOV_SIZE, nr);
+		outofbuf = false;
+		for (i = 0; i < to_xfer; i++) {
+			buf = fsm_dp_mempool_get_buf(mempool);
+			if (buf == NULL) {
+				mhi->stats.rx_out_of_buf++;
+				FSM_DP_DEBUG("%s: out of rx buffer!\n", __func__);
+				outofbuf = true;
+				break;
+			}
+			mhi->buf_array[i] = buf;
+			mhi->size_array[i] = mempool->mem.buf_sz;
 		}
-		ret = mhi_queue_transfer(mhi_dev,
-					 DMA_FROM_DEVICE,
-					 buf,
-					 mempool->mem.buf_sz,
-					 MHI_EOT);
+		if (i == 0)
+			return 0;
+		to_xfer = i;
+		ret = mhi_queue_n_transfer(mhi_dev,
+						DMA_FROM_DEVICE,
+						mhi->buf_array,
+						mhi->size_array,
+						mhi->flag_array,
+						to_xfer);
 		if (ret) {
-			fsm_dp_mempool_put_buf(mempool, buf);
+			for (i = 0; i < to_xfer; i++)
+				fsm_dp_mempool_put_buf(mempool,
+							mhi->buf_array[i]);
 			mhi->stats.rx_replenish_err++;
 			FSM_DP_ERROR("%s: failed to load rx buf!\n",
 				  __func__);
 			return ret;
 		}
 		mhi->stats.rx_replenish++;
+		if (outofbuf)
+			break;
+		nr -= to_xfer;
 	}
 
 	return 0;
@@ -108,9 +125,13 @@ static void __mhi_dl_xfer_cb(
 		fsm_dp_mempool_put_buf(mempool, result->buf_addr);
 	} else {
 		mhi->stats.rx_cnt++;
+		mhi->num_recv_till_replenish++;
 		fsm_dp_rx(drv, result->buf_addr, result->bytes_xferd);
 	}
-	__mhi_rx_replenish(mhi, mempool);
+	if (mhi->num_recv_till_replenish >=  FSM_DP_MAX_IOV_SIZE &&
+				__mhi_rx_replenish(mhi, mempool) == 0)
+		mhi->num_recv_till_replenish = 0;
+
 }
 
 static void __mhi_status_cb(struct mhi_device *mhi_dev, enum MHI_CB mhi_cb)
@@ -133,6 +154,7 @@ static int fsm_dp_mhi_probe(
 {
 	struct fsm_dp_drv *pdrv = __pdrv;
 	int ret;
+	int i;
 
 	FSM_DP_DEBUG("%s: probing mhi\n", __func__);
 
@@ -147,6 +169,9 @@ static int fsm_dp_mhi_probe(
 	}
 
 	pdrv->mhi.mhi_dev = mhi_dev;
+	for (i = 0; i < FSM_DP_MAX_IOV_SIZE; i++)
+		pdrv->mhi.flag_array[i] = MHI_EOT;
+	pdrv->mhi.num_recv_till_replenish = 0;
 	ret = fsm_dp_mhi_rx_replenish(pdrv);
 	if (ret) {
 		FSM_DP_ERROR("%s: fsm_dp_mhi_rx_replenish failed\n", __func__);
