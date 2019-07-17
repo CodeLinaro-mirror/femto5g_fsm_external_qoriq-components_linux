@@ -98,6 +98,7 @@ struct fsm_dp_rxqueue {
 	enum fsm_dp_rx_type type;
 	struct fsm_dp_ring ring;
 	wait_queue_head_t wq;
+	atomic_t refcnt;
 	bool inited;
 };
 

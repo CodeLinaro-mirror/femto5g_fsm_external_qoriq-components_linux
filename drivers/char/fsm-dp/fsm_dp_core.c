@@ -103,6 +103,12 @@ static void handle_tx_loopback(
 	}
 
 	rxq = &drv->rxq[job->dest];
+	if (!atomic_read(&rxq->refcnt)) {
+		drv->loopback.stats.tx_drop++;
+		FSM_DP_DEBUG("%s: drop packet\n", __func__);
+		goto free_txbuf;
+	}
+
 	mempool = drv->mempool[FSM_DP_MEM_TYPE_UL];
 	if (mempool == NULL) {
 		drv->loopback.stats.tx_err++;
@@ -335,6 +341,7 @@ static int fsm_dp_rxqueue_init(
 	init_waitqueue_head(&rxq->wq);
 	rxq->type = rx_type,
 	rxq->inited = true;
+	atomic_set(&rxq->refcnt, 0);
 
 	return 0;
 }
@@ -395,6 +402,11 @@ void fsm_dp_rx(struct fsm_dp_drv *pdrv, void *addr, unsigned int length)
 	default:
 		FSM_DP_DEBUG("%s: unsupport msg type(%u)\n",
 			     __func__, msghdr->type);
+		goto free_rxbuf;
+	}
+
+	if (!atomic_read(&rxq->refcnt)) {
+		FSM_DP_DEBUG("%s: rxq not active, drop message\n", __func__);
 		goto free_rxbuf;
 	}
 
