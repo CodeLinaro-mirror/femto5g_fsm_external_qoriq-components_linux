@@ -183,6 +183,17 @@ static int debugfs_loopback_read(struct seq_file *s, void *unused)
 }
 DEFINE_DEBUGFS_OPS(debugfs_loopback, debugfs_loopback_read, NULL);
 
+static int debugfs_rxq_refcnt_read(struct seq_file *s, void *unused)
+{
+	struct fsm_dp_rxqueue *rxq = (struct fsm_dp_rxqueue *)s->private;
+
+	if (rxq->inited)
+		seq_printf(s, "%d\n", atomic_read(&rxq->refcnt));
+
+	return 0;
+}
+DEFINE_DEBUGFS_OPS(debugfs_rxq_refcnt, debugfs_rxq_refcnt_read, NULL);
+
 static int debugfs_rxq_opstats_read(struct seq_file *s, void *unused)
 {
 	struct fsm_dp_rxqueue *rxq = (struct fsm_dp_rxqueue *)s->private;
@@ -645,6 +656,12 @@ static int debugfs_create_rxq_dir(struct dentry *parent, struct fsm_dp_drv *drv)
 		entry = debugfs_create_file("opstats", 0444, dentry,
 					    &drv->rxq[type],
 					    &debugfs_rxq_opstats_ops);
+		if (!entry)
+			return -ENOMEM;
+
+		entry = debugfs_create_file("refcnt", 0444, dentry,
+					    &drv->rxq[type],
+					    &debugfs_rxq_refcnt_ops);
 		if (!entry)
 			return -ENOMEM;
 	}

@@ -42,6 +42,15 @@ static inline void *usr_to_kern_vaddr(
 	return ((char *)mempool->mem.loc.page_base + offset);
 }
 
+static inline struct fsm_dp_rxqueue *rxqueue_vma_to_rxqueue(
+	struct fsm_dp_rxqueue_vma *rxq_vma)
+{
+	struct fsm_dp_cdev *cdev = container_of(rxq_vma,
+						struct fsm_dp_cdev,
+						rxqueue_vma[rxq_vma->type]);
+	return &cdev->pdrv->rxq[rxq_vma->type];
+}
+
 static void __cdev_init_mempool_vma(struct fsm_dp_cdev *cdev)
 {
 	struct fsm_dp_drv *drv = cdev->pdrv;
@@ -569,21 +578,28 @@ static void __rxqueue_vma_open(struct vm_area_struct *vma)
 	FSM_DP_DEBUG("%s: vma %p\n", __func__, vma);
 
 	if (atomic_add_return(1, &rxq_vma->refcnt) == 1) {
+		struct fsm_dp_rxqueue *rxq;
+
 		rxq_vma->vma = vma;
 		rxq_vma->type = MMAP_RX_COOKIE_TO_TYPE(
 			vma->vm_pgoff << PAGE_SHIFT);
+
+		rxq = rxqueue_vma_to_rxqueue(rxq_vma);
+		atomic_inc(&rxq->refcnt);
 	}
 }
 
 static void __rxqueue_vma_close(struct vm_area_struct *vma)
 {
 	struct fsm_dp_rxqueue_vma *rxq_vma = vma->vm_private_data;
+	struct fsm_dp_rxqueue *rxq = rxqueue_vma_to_rxqueue(rxq_vma);
 
 	FSM_DP_DEBUG("%s: vma %p\n", __func__, vma);
 
 	if (!atomic_dec_and_test(&rxq_vma->refcnt))
 		return;
 	rxq_vma->vma = NULL;
+	atomic_dec(&rxq->refcnt);
 }
 
 static const struct vm_operations_struct __rxqueue_vma_ops = {
