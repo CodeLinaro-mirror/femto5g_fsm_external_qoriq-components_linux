@@ -1229,7 +1229,7 @@
 
 		mhi_event@4 {
 			mhi,num-elements = <1024>;
-			mhi,intmod = <0>;
+			mhi,intmod = <0x80005>;
 			mhi,msi = <5>;
 			mhi,chan = <100>;
 			mhi,priority = <1>;
