@@ -92,8 +92,16 @@ struct fsm_dp_msghdr {
 	uint16_t sequence : 16;
 } __attribute__((packed));
 
-typedef unsigned long fsm_dp_ring_element_t;
+typedef unsigned long fsm_dp_ring_element_data_t;
 typedef unsigned int fsm_dp_ring_index_t;
+
+struct fsm_dp_ring_element {
+	unsigned long element_ctrl; /* 1 entry not valid, 0 valid */
+				    /* Other bits for control flags: tbd */
+	fsm_dp_ring_element_data_t element_data;
+};
+
+typedef struct fsm_dp_ring_element fsm_dp_ring_element_t;
 
 struct fsm_dp_mmap_cfg {
 	__u32 length;	/* length parameter for mmap */

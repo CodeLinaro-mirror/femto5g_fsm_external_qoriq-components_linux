@@ -274,7 +274,7 @@ static int __cdev_ioctl_testring_write(
 
 	if (drv->test_ring.enable)
 		ret = fsm_dp_ring_write(&test_ring->ring,
-				     TEST_RING_WRITE_MAGIC_VALUE);
+				     TEST_RING_WRITE_MAGIC_VALUE, 0);
 	return ret;
 }
 

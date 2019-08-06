@@ -92,6 +92,8 @@ int fsm_dp_ring_init(
 {
 	unsigned int allocsz = ringsz * sizeof(*ring->element);
 	char *aligned_ptr;
+	fsm_dp_ring_element_t *elem_p;
+	int i;
 
 	/* cons and prod index space, aligned to cache line */
 	allocsz += 4 * cache_line_size();
@@ -112,8 +114,10 @@ int fsm_dp_ring_init(
 	aligned_ptr += cache_line_size();
 	ring->cons_tail = (fsm_dp_ring_index_t *)aligned_ptr;
 	aligned_ptr += cache_line_size();
-	ring->element = (fsm_dp_ring_element_t *)aligned_ptr;
+	ring->element = elem_p = (fsm_dp_ring_element_t *)aligned_ptr;
 
+	for (i = 0; i < ringsz; i++, elem_p++)
+		elem_p->element_ctrl = 1; /* not valid */
 	ring->size = ringsz;
 	return 0;
 }
@@ -152,11 +156,11 @@ int fsm_dp_ring_get_cfg(struct fsm_dp_ring *ring, struct fsm_dp_ring_cfg *cfg)
 /* Read from ring */
 int fsm_dp_ring_read(
 	struct fsm_dp_ring *ring,
-	fsm_dp_ring_element_t *element_ptr)
+	fsm_dp_ring_element_data_t *element_ptr, unsigned int *flag)
 {
 	register fsm_dp_ring_index_t cons_head, cons_next, cons_tail;
 	register fsm_dp_ring_index_t prod_tail, mask;
-	fsm_dp_ring_element_t data;
+	fsm_dp_ring_element_data_t data;
 
 	if (unlikely(ring == NULL))
 		return -EINVAL;
@@ -183,11 +187,14 @@ again:
 	}
 
 	/* Read the ring */
-	data = ring->element[(cons_head & mask)];
+	data = ring->element[(cons_head & mask)].element_data;
+	if (flag)
+		*flag = ring->element[(cons_head & mask)].element_ctrl >> 1;
 	rmb();	/* Get current element */
 
 	/* After read, write to ring with bit0 on */
-	ring->element[(cons_head & mask)] = data | 1;
+
+	ring->element[(cons_head & mask)].element_ctrl = 1;
 	wmb();	/* Ensure element is written */
 
 	if (element_ptr)
@@ -225,7 +232,7 @@ repeat:
 		return 0;
 
 	/* The reader has not cleared the bit0 */
-	if (!(ring->element[(cons_tail & mask)] & 1)) {
+	if (!(ring->element[(cons_tail & mask)].element_ctrl & 1)) {
 		ring->opstats.cons_tail_updt_stop++;
 		return 0;
 	}
@@ -234,7 +241,8 @@ repeat:
 }
 
 /* Write to ring */
-int fsm_dp_ring_write(struct fsm_dp_ring *ring, fsm_dp_ring_element_t element)
+int fsm_dp_ring_write(struct fsm_dp_ring *ring, fsm_dp_ring_element_data_t data,
+		unsigned int flag)
 {
 	register fsm_dp_ring_index_t prod_head, prod_next, prod_tail;
 	register fsm_dp_ring_index_t cons_tail, mask;
@@ -264,11 +272,12 @@ again:
 	}
 
 #ifdef CONFIG_FSM_DP_TEST
-	if (element == TEST_RING_WRITE_MAGIC_VALUE)
-		element = prod_head << 1;
+	if (data == TEST_RING_WRITE_MAGIC_VALUE)
+		data = prod_head << 1;
 #endif
 	/* Write to ring buffer with bit0 off */
-	ring->element[(prod_head & mask)] = element & ~1;
+	ring->element[(prod_head & mask)].element_data = data;
+	ring->element[(prod_head & mask)].element_ctrl = flag << 1;
 	wmb();	/* Ensure element is written */
 
 	ring->opstats.write_ok++;
@@ -304,7 +313,7 @@ repeat:
 		return 0;
 
 	/* The writer has not written the data yet */
-	if (ring->element[(prod_tail & mask)] & 1) {
+	if (ring->element[(prod_tail & mask)].element_ctrl & 1) {
 		ring->opstats.prod_tail_updt_stop++;
 		return 0;
 	}
@@ -407,7 +416,7 @@ static void fsm_dp_mempool_init(struct fsm_dp_mempool *mempool)
 {
 	struct fsm_dp_mem *mem = &mempool->mem;
 	struct fsm_dp_ring *ring = &mempool->ring;
-	fsm_dp_ring_element_t element;
+	fsm_dp_ring_element_data_t element_data;
 	int i;
 
 	switch (mempool->type) {
@@ -415,10 +424,11 @@ static void fsm_dp_mempool_init(struct fsm_dp_mempool *mempool)
 	case FSM_DP_MEM_TYPE_DL_L1_CTL:
 	case FSM_DP_MEM_TYPE_DL_RF:
 	case FSM_DP_MEM_TYPE_UL:
-		element = mem->loc.page_off;
+		element_data = mem->loc.page_off;
 		for (i = 0; i < mem->buf_cnt; i++) {
-			ring->element[i] = element;
-			element += mem->buf_sz;
+			ring->element[i].element_data = element_data;
+			ring->element[i].element_ctrl = 0; /* entry valid */
+			element_data += mem->buf_sz;
 		}
 		*ring->cons_head = 0;
 		*ring->cons_tail = 0;
@@ -585,7 +595,7 @@ int fsm_dp_mempool_put_buf(struct fsm_dp_mempool *mempool, void *vaddr)
 	/* align to page boundary for mmap */
 	offset += mem->loc.page_off;
 
-	ret = fsm_dp_ring_write(&mempool->ring, (fsm_dp_ring_element_t)offset);
+	ret = fsm_dp_ring_write(&mempool->ring, (fsm_dp_ring_element_data_t)offset, 0);
 	if (ret)
 		mempool->stats.buf_put_err++;
 	else
@@ -597,14 +607,15 @@ int fsm_dp_mempool_put_buf(struct fsm_dp_mempool *mempool, void *vaddr)
 void *fsm_dp_mempool_get_buf(struct fsm_dp_mempool *mempool)
 {
 	struct fsm_dp_mem *mem;
-	fsm_dp_ring_element_t val;
+	fsm_dp_ring_element_data_t val;
+	unsigned int flag;
 	unsigned long offset;
 	void *ptr;
 
 	if (unlikely(mempool == NULL))
 		return NULL;
 
-	if (fsm_dp_ring_read(&mempool->ring, &val)) {
+	if (fsm_dp_ring_read(&mempool->ring, &val, &flag)) {
 		mempool->stats.buf_get_err++;
 		return NULL;
 	}

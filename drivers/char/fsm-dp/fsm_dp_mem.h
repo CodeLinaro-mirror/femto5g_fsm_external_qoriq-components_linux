@@ -121,9 +121,11 @@ int fsm_dp_ring_init(
 
 void fsm_dp_ring_cleanup(struct fsm_dp_ring *ring);
 
-int fsm_dp_ring_read(struct fsm_dp_ring *ring, fsm_dp_ring_element_t *element);
+int fsm_dp_ring_read(struct fsm_dp_ring *ring, fsm_dp_ring_element_data_t *element_data,
+		unsigned int *flag);
 
-int fsm_dp_ring_write(struct fsm_dp_ring *ring, fsm_dp_ring_element_t element);
+int fsm_dp_ring_write(struct fsm_dp_ring *ring, fsm_dp_ring_element_data_t element_data,
+		unsigned int flag);
 
 bool fsm_dp_ring_is_empty(struct fsm_dp_ring *ring);
 
