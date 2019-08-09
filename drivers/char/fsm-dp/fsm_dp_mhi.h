@@ -60,6 +60,7 @@ static inline int fsm_dp_mhi_n_tx(struct fsm_dp_mhi *mhi,
 {
 	int ret;
 
+	spin_lock_bh(&mhi->tx_lock);
 	ret = mhi_queue_n_transfer(mhi->mhi_dev,
 				 DMA_TO_DEVICE,
 				 msg_array, msglen_array,
@@ -68,6 +69,7 @@ static inline int fsm_dp_mhi_n_tx(struct fsm_dp_mhi *mhi,
 		mhi->stats.tx_cnt += num;
 	else
 		mhi->stats.tx_err += num;
+	spin_unlock_bh(&mhi->tx_lock);
 	return ret;
 }
 
@@ -78,6 +80,7 @@ static inline int fsm_dp_mhi_tx(struct fsm_dp_mhi *mhi,
 {
 	int ret;
 
+	spin_lock_bh(&mhi->tx_lock);
 	ret = mhi_queue_transfer(mhi->mhi_dev,
 				 DMA_TO_DEVICE,
 				 msg, msglen,
@@ -86,6 +89,7 @@ static inline int fsm_dp_mhi_tx(struct fsm_dp_mhi *mhi,
 		mhi->stats.tx_cnt++;
 	else
 		mhi->stats.tx_err++;
+	spin_unlock_bh(&mhi->tx_lock);
 	return ret;
 }
 
