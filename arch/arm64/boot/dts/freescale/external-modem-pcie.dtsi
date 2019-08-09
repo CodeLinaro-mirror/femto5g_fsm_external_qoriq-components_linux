@@ -1245,6 +1245,7 @@
 			mhi,priority = <1>;
 			mhi,brstmode = <2>;
 			mhi,hw-ev;
+			mhi,client-manage;
 		};
 
 		mhi_netdev_0: mhi_rmnet@0 {

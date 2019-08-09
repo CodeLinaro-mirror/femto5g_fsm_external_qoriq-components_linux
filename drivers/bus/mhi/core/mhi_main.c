@@ -1856,6 +1856,17 @@ int mhi_get_no_free_descriptors(struct mhi_device *mhi_dev,
 }
 EXPORT_SYMBOL(mhi_get_no_free_descriptors);
 
+int mhi_get_total_descriptors(struct mhi_device *mhi_dev,
+				enum dma_data_direction dir)
+{
+	struct mhi_chan *mhi_chan = (dir == DMA_TO_DEVICE) ?
+		mhi_dev->ul_chan : mhi_dev->dl_chan;
+	struct mhi_ring *tre_ring = &mhi_chan->tre_ring;
+
+	return tre_ring->elements;
+}
+EXPORT_SYMBOL(mhi_get_total_descriptors);
+
 static int __mhi_bdf_to_controller(struct device *dev, void *tmp)
 {
 	struct mhi_device *mhi_dev = to_mhi_device(dev);

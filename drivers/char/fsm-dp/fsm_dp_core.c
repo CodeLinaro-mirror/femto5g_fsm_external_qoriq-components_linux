@@ -20,11 +20,13 @@
 #include "fsm_dp.h"
 
 #define DEFAULT_LOOPBACK_JOB_NUM 8192
+#define FSM_DP_NAPI_WEIGHT 64
 
 #ifdef CONFIG_FSM_DP_TEST
 
 #define DEFAULT_TEST_RING_SIZE 2048
 #define TEST_RING_MMAP_COOKIE	0x80000000
+
 
 static int fsm_dp_test_init(struct fsm_dp_drv *pdrv)
 {
@@ -589,6 +591,52 @@ static void fsm_dp_core_cleanup(struct fsm_dp_drv *pdrv)
 	kfree(pdrv);
 }
 
+static int fsm_dp_poll(struct napi_struct *napi, int budget)
+{
+	int rx_work = 0;
+	struct fsm_dp_drv *pdrv;
+	int ret;
+
+	pdrv = container_of(napi, struct fsm_dp_drv, napi);
+	rx_work = mhi_poll(pdrv->mhi.mhi_dev, budget);
+	if (rx_work < 0) {
+		rx_work = 0;
+		pr_err("Error polling ret:%d\n", rx_work);
+		napi_complete(napi);
+		goto exit_poll;
+	}
+
+	ret = fsm_dp_mhi_rx_replenish(pdrv);
+	if (ret == -ENOMEM)
+		schedule_work(&pdrv->alloc_work);  /* later */
+	if (rx_work < budget)
+		napi_complete(napi);
+	else
+		pdrv->stats.rx_budget_overflow++;
+exit_poll:
+	return rx_work;
+}
+
+static void fsm_dp_alloc_work(struct work_struct *work)
+{
+	struct fsm_dp_drv *pdrv;
+
+	pdrv = container_of(work, struct fsm_dp_drv, alloc_work);
+
+	const int sleep_ms =  1000;
+	int retry = 60;
+	int ret;
+
+	do {
+		ret = fsm_dp_mhi_rx_replenish(pdrv);
+		/* sleep and try again */
+		if (ret == -ENOMEM) {
+			msleep(sleep_ms);
+			retry--;
+		}
+	} while (ret == -ENOMEM && retry);
+}
+
 static int __init fsm_dp_probe(struct platform_device *pdev)
 {
 	struct fsm_dp_drv *pdrv;
@@ -619,6 +667,13 @@ static int __init fsm_dp_probe(struct platform_device *pdev)
 		goto cleanup_cdev;
 
 	platform_set_drvdata(pdev, pdrv);
+
+	init_dummy_netdev(&pdrv->dummy_dev);
+	netif_napi_add(&pdrv->dummy_dev, &pdrv->napi, fsm_dp_poll,
+						FSM_DP_NAPI_WEIGHT);
+	napi_enable(&pdrv->napi);
+	INIT_WORK(&pdrv->alloc_work, fsm_dp_alloc_work);
+
 	pr_info("FSM-DP: module initialized now\n");
 	return 0;
 
@@ -637,6 +692,9 @@ static int __exit fsm_dp_remove(struct platform_device *pdev)
 	struct fsm_dp_drv *pdrv = platform_get_drvdata(pdev);
 
 	if (pdrv) {
+		flush_work(&pdrv->alloc_work);
+		napi_disable(&pdrv->napi);
+		netif_napi_del(&pdrv->napi);
 		fsm_dp_cdev_cleanup(pdrv);
 		fsm_dp_mhi_cleanup(pdrv);
 		fsm_dp_debugfs_cleanup(pdrv);
