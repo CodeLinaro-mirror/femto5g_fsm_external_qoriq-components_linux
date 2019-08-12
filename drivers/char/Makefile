@@ -61,3 +61,4 @@ obj-$(CONFIG_TILE_SROM)		+= tile-srom.o
 obj-$(CONFIG_XILLYBUS)		+= xillybus/
 obj-$(CONFIG_POWERNV_OP_PANEL)	+= powernv-op-panel.o
 obj-$(CONFIG_FSM_DP)		+= fsm-dp/
+obj-$(CONFIG_FSM_TTI_INTR)	+= fsm-tti-intr/
