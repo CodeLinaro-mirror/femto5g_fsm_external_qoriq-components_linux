@@ -1228,7 +1228,7 @@
 		};
 
 		mhi_event@4 {
-			mhi,num-elements = <1024>;
+			mhi,num-elements = <2048>;
 			mhi,intmod = <0x80005>;
 			mhi,msi = <5>;
 			mhi,chan = <100>;
@@ -1238,7 +1238,7 @@
 		};
 
 		mhi_event@5 {
-			mhi,num-elements = <1024>;
+			mhi,num-elements = <2048>;
 			mhi,intmod = <0x80003>;
 			mhi,msi = <6>;
 			mhi,chan = <101>;
