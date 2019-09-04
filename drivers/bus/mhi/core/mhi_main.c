@@ -31,7 +31,14 @@ int __must_check mhi_read_reg(struct mhi_controller *mhi_cntrl,
 			      u32 offset,
 			      u32 *out)
 {
-	u32 tmp = readl_relaxed(base + offset);
+	u32 tmp;
+
+
+	if (mhi_cntrl->mhi_removed) {
+		MHI_LOG("%s mhi removed\n", __func__);
+		return -1;
+	}
+	tmp  = readl_relaxed(base + offset);
 
 	/* unexpected value, query the link status */
 	if (PCI_INVALID_READ(tmp) &&
@@ -101,6 +108,10 @@ void mhi_write_reg(struct mhi_controller *mhi_cntrl,
 		   u32 offset,
 		   u32 val)
 {
+	if (mhi_cntrl->mhi_removed) {
+		MHI_LOG("%s mhi removed\n", __func__);
+		return;
+	}
 	writel_relaxed(val, base + offset);
 }
 
@@ -127,6 +138,10 @@ void mhi_write_db(struct mhi_controller *mhi_cntrl,
 		  void __iomem *db_addr,
 		  dma_addr_t wp)
 {
+	if (mhi_cntrl->mhi_removed) {
+		MHI_LOG("%s mhi removed\n", __func__);
+		return;
+	}
 	mhi_write_reg(mhi_cntrl, db_addr, 4, upper_32_bits(wp));
 	mhi_write_reg(mhi_cntrl, db_addr, 0, lower_32_bits(wp));
 }
@@ -136,6 +151,10 @@ void mhi_db_brstmode(struct mhi_controller *mhi_cntrl,
 		     void __iomem *db_addr,
 		     dma_addr_t wp)
 {
+	if (mhi_cntrl->mhi_removed) {
+		MHI_LOG("%s mhi removed\n", __func__);
+		return;
+	}
 	if (db_cfg->db_mode) {
 		db_cfg->db_val = wp;
 		mhi_write_db(mhi_cntrl, db_addr, wp);
@@ -148,6 +167,10 @@ void mhi_db_brstmode_disable(struct mhi_controller *mhi_cntrl,
 			     void __iomem *db_addr,
 			     dma_addr_t wp)
 {
+	if (mhi_cntrl->mhi_removed) {
+		MHI_LOG("%s mhi removed\n", __func__);
+		return;
+	}
 	db_cfg->db_val = wp;
 	mhi_write_db(mhi_cntrl, db_addr, wp);
 }
@@ -393,6 +416,8 @@ int mhi_queue_skb(struct mhi_device *mhi_dev,
 	buf_info->wp = tre_ring->wp;
 	buf_info->dir = mhi_chan->dir;
 	buf_info->len = len;
+	if (assert_wake)
+		buf_info->wake_put = true;
 	ret = mhi_cntrl->map_single(mhi_cntrl, buf_info);
 	if (ret)
 		goto map_error;
@@ -679,6 +704,7 @@ int mhi_destroy_device(struct device *dev, void *data)
 	MHI_LOG("destroy device for chan:%s\n", mhi_dev->chan_name);
 
 	/* notify the client and remove the device from mhi bus */
+	mhi_notify(mhi_dev, MHI_CB_DEVICE_DESTROYED);
 	device_del(dev);
 	put_device(dev);
 
@@ -1630,7 +1656,7 @@ void mhi_reset_chan(struct mhi_controller *mhi_cntrl, struct mhi_chan *mhi_chan)
 	while (tre_ring->rp != tre_ring->wp) {
 		struct mhi_buf_info *buf_info = buf_ring->rp;
 
-		if (mhi_chan->dir == DMA_TO_DEVICE)
+		if (buf_info->wake_put && mhi_chan->dir == DMA_TO_DEVICE)
 			mhi_cntrl->wake_put(mhi_cntrl, false);
 
 		mhi_cntrl->unmap_single(mhi_cntrl, buf_info);

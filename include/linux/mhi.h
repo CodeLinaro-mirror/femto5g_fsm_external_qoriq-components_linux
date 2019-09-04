@@ -35,6 +35,7 @@ enum MHI_CB {
 	MHI_CB_LPM_ENTER,
 	MHI_CB_LPM_EXIT,
 	MHI_CB_EE_RDDM,
+	MHI_CB_DEVICE_DESTROYED,
 };
 
 /**
@@ -289,6 +290,7 @@ struct mhi_controller {
 	void *log_buf;
 	struct dentry *dentry;
 	struct dentry *parent;
+	bool mhi_removed;
 };
 
 /**

@@ -46,6 +46,7 @@ struct fsm_dp_mhi {
 	void *buf_array[FSM_DP_MAX_IOV_SIZE];
 	size_t size_array[FSM_DP_MAX_IOV_SIZE];
 	enum MHI_FLAGS flag_array[FSM_DP_MAX_IOV_SIZE];
+	bool mhi_destroyed;
 };
 
 int fsm_dp_mhi_init(struct fsm_dp_drv *pdrv);
@@ -60,6 +61,8 @@ static inline int fsm_dp_mhi_n_tx(struct fsm_dp_mhi *mhi,
 {
 	int ret;
 
+	if (mhi->mhi_destroyed)
+		return -ENODEV;
 	spin_lock_bh(&mhi->tx_lock);
 	ret = mhi_queue_n_transfer(mhi->mhi_dev,
 				 DMA_TO_DEVICE,
@@ -80,6 +83,8 @@ static inline int fsm_dp_mhi_tx(struct fsm_dp_mhi *mhi,
 {
 	int ret;
 
+	if (mhi->mhi_destroyed)
+		return -ENODEV;
 	spin_lock_bh(&mhi->tx_lock);
 	ret = mhi_queue_transfer(mhi->mhi_dev,
 				 DMA_TO_DEVICE,

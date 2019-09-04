@@ -139,12 +139,18 @@ static void __mhi_status_cb(struct mhi_device *mhi_dev, enum MHI_CB mhi_cb)
 
 	struct fsm_dp_drv *pdrv = mhi_device_get_devdata(mhi_dev);
 
-	if (mhi_cb != MHI_CB_PENDING_DATA)
-		return;
-	if (napi_schedule_prep(&pdrv->napi)) {
-		__napi_schedule(&pdrv->napi);
-		pdrv->stats.rx_int++;
-		return;
+	switch (mhi_cb) {
+	case MHI_CB_DEVICE_DESTROYED:
+		pdrv->mhi.mhi_destroyed = true;
+		break;
+	case MHI_CB_PENDING_DATA:
+		if (napi_schedule_prep(&pdrv->napi)) {
+			__napi_schedule(&pdrv->napi);
+			pdrv->stats.rx_int++;
+		}
+		break;
+	default:
+		break;
 	}
 }
 
@@ -182,6 +188,7 @@ static int fsm_dp_mhi_probe(
 	}
 
 	pdrv->mhi.mhi_dev = mhi_dev;
+	pdrv->mhi.mhi_destroyed = false;
 	for (i = 0; i < FSM_DP_MAX_IOV_SIZE; i++)
 		pdrv->mhi.flag_array[i] = MHI_EOT;
 	spin_lock_init(&pdrv->mhi.rx_lock);

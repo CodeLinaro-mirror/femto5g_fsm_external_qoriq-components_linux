@@ -566,7 +566,17 @@ static void mhi_pm_disable_transition(struct mhi_controller *mhi_cntrl,
 
 	mutex_lock(&mhi_cntrl->pm_mutex);
 
+	/*
+	 * The only thing we support is pci_remove forcefully. At this point the mhi
+	 * device may crash.
+	 * The driver may have outstanding dma transfer request to device. The
+	 * dev_wake may not be zero, Since device crashes already, there is no
+	 * event coming to decrement dev_wake count.
+	 * Disable the following assert.
+	 */
+#ifdef GRACEFUL_PCI_REMOVE
 	MHI_ASSERT(atomic_read(&mhi_cntrl->dev_wake), "dev_wake != 0");
+#endif
 
 	/* reset the ev rings and cmd rings */
 	MHI_LOG("Resetting EV CTXT and CMD CTXT\n");
@@ -850,6 +860,9 @@ void mhi_power_down(struct mhi_controller *mhi_cntrl, bool graceful)
 				to_mhi_pm_state_str(MHI_PM_LD_ERR_FATAL_DETECT),
 				to_mhi_pm_state_str(mhi_cntrl->pm_state));
 	}
+#ifndef GRACEFUL_PCI_REMOVE
+	mhi_cntrl->mhi_removed  = true;
+#endif
 	mhi_pm_disable_transition(mhi_cntrl, MHI_PM_SHUTDOWN_PROCESS);
 
 	mhi_deinit_debugfs(mhi_cntrl);

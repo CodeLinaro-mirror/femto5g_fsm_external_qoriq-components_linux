@@ -546,6 +546,7 @@ int mhi_pci_probe(struct pci_dev *pci_dev,
 	if (ret)
 		goto error_init_pci;
 
+	mhi_cntrl->mhi_removed = false;
 	/* start power up sequence */
 	if (!debug_mode) {
 		ret = mhi_async_power_up(mhi_cntrl);
