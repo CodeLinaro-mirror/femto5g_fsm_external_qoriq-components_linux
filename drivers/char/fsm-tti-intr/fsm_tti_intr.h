@@ -69,7 +69,7 @@ struct fsm_tti_intr_drv {
 	struct class *dev_class;
 	struct cdev cdev;
 	bool is_poll_enabled;
-	bool is_mem_mapped;
+	bool is_seeding_done;
 	bool is_tti_updated;
 	bool is_first_tti_intr;
 	wait_queue_head_t tti_poll_waitqueue;

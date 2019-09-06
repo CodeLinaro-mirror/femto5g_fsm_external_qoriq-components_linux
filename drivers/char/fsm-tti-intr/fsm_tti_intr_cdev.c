@@ -24,12 +24,8 @@ static int fsm_tti_intr_cdev_close(
 		return -ENOMEM;
 	}
 
-	kfree(tti_drv_cntx->shared_data);
-	tti_drv_cntx->shared_data = NULL;
 	tti_drv_cntx->is_tti_updated = false;
-	tti_drv_cntx->is_mem_mapped = false;
 	tti_drv_cntx->is_poll_enabled = false;
-	tti_drv_cntx->is_first_tti_intr = false;
 	return 0;
 }
 
@@ -46,15 +42,7 @@ static int fsm_tti_intr_cdev_open(
 		return -ENOMEM;
 	}
 
-	/* allocate shared data and update with the initial value */
-	tti_drv_cntx->shared_data = kzalloc(PAGE_SIZE, GFP_KERNEL);
-	if (IS_ERR(tti_drv_cntx->shared_data)) {
-		FSM_TTI_ERROR("FSM-TTI: %s: failed to alloc shared memory\n",
-			__func__);
-		return -ENOMEM;
-	}
-
-	FSM_TTI_INFO("FSM-TTI: %s: ptr:%p allocated\n", __func__,
+	FSM_TTI_INFO("FSM-TTI: %s: shared ptr:%p allocated\n", __func__,
 		tti_drv_cntx->shared_data);
 
 	file->private_data = tti_drv_cntx;
@@ -84,6 +72,9 @@ static long fsm_tti_intr_cdev_ioctl(
 			return -EFAULT;
 		}
 
+		/* update seeding complete flag */
+		tti_drv_cntx->is_seeding_done = true;
+
 		/* Update into debugfs stats */
 		tti_drv_cntx->debugfs_stats.initial_sfn =
 			tti_drv_cntx->shared_data->sfn;
@@ -91,10 +82,11 @@ static long fsm_tti_intr_cdev_ioctl(
 			tti_drv_cntx->shared_data->slot;
 
 		FSM_TTI_INFO(
-			"FSM-TTI: %s: initial sfn: %u, slot: %u\n",
+			"FSM-TTI: %s: initial sfn: %u, slot: %u, time:%lld\n",
 			__func__,
 			tti_drv_cntx->shared_data->sfn,
-			tti_drv_cntx->shared_data->slot);
+			tti_drv_cntx->shared_data->slot,
+			ktime_get());
 		break;
 	default:
 		tti_drv_cntx->shared_data->sfn = 0;
@@ -169,10 +161,6 @@ static int fsm_tti_intr_cdev_mmap(
 			__func__);
 		return ret;
 	}
-
-	/* set the flag to activate gpio irq handler */
-	tti_drv_cntx->is_mem_mapped = true;
-
 	return 0;
 }
 

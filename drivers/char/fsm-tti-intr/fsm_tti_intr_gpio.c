@@ -20,7 +20,7 @@ static irqreturn_t fsm_tti_gpio_irq_handler(int irq, void *irq_data)
 
 	/* update the SFN and slot number */
 	sdata = tti_intr_drv->shared_data;
-	if (sdata && (tti_intr_drv->is_mem_mapped)) {
+	if (sdata && (tti_intr_drv->is_seeding_done)) {
 		/* Update stats */
 		sdata->abs_recv_time = ktime_get();
 		tti_intr_drv->debugfs_stats.current_tti_recv_time =
@@ -31,19 +31,19 @@ static irqreturn_t fsm_tti_gpio_irq_handler(int irq, void *irq_data)
 			tti_intr_drv->is_first_tti_intr = true;
 			tti_intr_drv->debugfs_stats.first_tti_recv_time =
 				sdata->abs_recv_time;
+		} else {
+			sdata->slot = (sdata->slot + 1) %
+				FSM_TTI_DEFAULT_MAX_SLOT_NUM;
+			if (sdata->slot == 0)
+				sdata->sfn = (sdata->sfn + 1) &
+					FSM_TTI_MAX_SFN_MOD_FACTOR;
+			/* Make sure sfn/slot is updated before moving ahead */
+			smp_mb();
 		}
-
 		sdata->intr_recv_count = sdata->intr_recv_count + 1;
 		tti_intr_drv->debugfs_stats.current_tti_count =
 			sdata->intr_recv_count;
 		/* Make sure timestamps are updated before sfn/slot */
-		smp_mb();
-		sdata->slot = (sdata->slot + 1) % FSM_TTI_DEFAULT_MAX_SLOT_NUM;
-		if (sdata->slot == 0)
-			sdata->sfn = (sdata->sfn + 1) &
-				FSM_TTI_MAX_SFN_MOD_FACTOR;
-
-		/* Make sure sfn/slot is updated before moving ahead */
 		smp_mb();
 	}
 
@@ -167,6 +167,14 @@ static int __init fsm_tti_intr_probe(struct platform_device *pdev)
 	/* keep a driver reference to the device structure */
 	platform_set_drvdata(pdev, tti_intr_drv);
 
+	/* allocate shared data */
+	tti_intr_drv->shared_data = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (IS_ERR(tti_intr_drv->shared_data)) {
+		FSM_TTI_ERROR("FSM-TTI: %s: failed to alloc shared memory\n",
+			__func__);
+		return -ENOMEM;
+	}
+
 	/* initialize char interface to userspace */
 	ret = fsm_tti_cdev_init(tti_intr_drv);
 	if (ret)
@@ -179,8 +187,8 @@ static int __init fsm_tti_intr_probe(struct platform_device *pdev)
 	/* initialize wait queue */
 	init_waitqueue_head(&tti_intr_drv->tti_poll_waitqueue);
 	/* initialize the flags */
-	tti_intr_drv->is_mem_mapped = false;
 	tti_intr_drv->is_tti_updated = false;
+	tti_intr_drv->is_seeding_done = false;
 	tti_intr_drv->is_poll_enabled = false;
 	tti_intr_drv->is_first_tti_intr = false;
 	FSM_TTI_INFO("FSM-TTI: module initialized\n");
@@ -201,6 +209,8 @@ static int __exit fsm_tti_intr_remove(struct platform_device *pdev)
 	if (tti_intr_drv) {
 		fsm_tti_debugfs_cleanup(tti_intr_drv);
 		fsm_tti_cdev_cleanup(tti_intr_drv);
+		kfree(tti_intr_drv->shared_data);
+		tti_intr_drv->shared_data = NULL;
 		kfree(tti_intr_drv);
 	}
 	FSM_TTI_INFO("FSM-TTI: module removed\n");
