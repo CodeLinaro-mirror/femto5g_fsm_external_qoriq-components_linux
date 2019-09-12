@@ -73,12 +73,18 @@ struct fsm_dp_mempool_stats {
 };
 
 struct fsm_dp_mempool {
+	struct list_head list;
 	struct fsm_dp_drv *drv;
 	enum fsm_dp_mem_type type;
 	struct fsm_dp_ring ring;
 	struct fsm_dp_mem mem;
 	atomic_t ref;
 	struct fsm_dp_mempool_stats stats;
+};
+
+struct fsm_dp_mempool_task {
+	struct delayed_work dwork;
+	struct list_head mempool_head;
 };
 
 struct fsm_dp_mempool *fsm_dp_mempool_alloc(
@@ -88,6 +94,10 @@ struct fsm_dp_mempool *fsm_dp_mempool_alloc(
 	unsigned int buf_cnt);
 
 void fsm_dp_mempool_free(struct fsm_dp_mempool *mempool);
+
+int fsm_dp_mempool_task_init(struct fsm_dp_mempool_task *task);
+
+void fsm_dp_mempool_task_cleanup(struct fsm_dp_mempool_task *task);
 
 int fsm_dp_mempool_get_cfg(
 	struct fsm_dp_mempool *mempool,

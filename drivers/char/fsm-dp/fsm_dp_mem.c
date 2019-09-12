@@ -15,6 +15,8 @@
 #include "fsm_dp.h"
 #include "fsm_dp_mem.h"
 
+#define FSM_DP_MEMPOOL_RELEASE_DELAY	(HZ * 2)
+
 static inline struct fsm_dp_mempool *fsm_dp_mem_to_mempool(
 	struct fsm_dp_mem *mem)
 {
@@ -373,45 +375,6 @@ static int fsm_dp_mem_get_cfg(
 	return 0;
 }
 
-static struct fsm_dp_mempool *__try_and_hold_drv_mempool(
-	struct fsm_dp_drv *pdrv,
-	enum fsm_dp_mem_type type,
-	unsigned int buf_sz,
-	unsigned int buf_cnt)
-{
-	struct fsm_dp_mempool *mempool;
-
-	mempool = pdrv->mempool[type];
-	if (mempool == NULL)
-		return NULL;
-
-	if (buf_sz > mempool->mem.buf_sz || buf_cnt > mempool->mem.buf_cnt) {
-		FSM_DP_ERROR("%s: can't use existing mempool, type=%u\n",
-			  __func__, type);
-		return NULL;
-	}
-
-	__fsm_dp_mempool_hold(mempool);
-	FSM_DP_DEBUG("%s: use existing mempool, type=%u\n", __func__, type);
-	return mempool;
-}
-
-static inline struct fsm_dp_mempool *try_and_hold_drv_mempool(
-	struct fsm_dp_drv *pdrv,
-	enum fsm_dp_mem_type type,
-	unsigned int buf_sz,
-	unsigned int buf_cnt)
-{
-	struct fsm_dp_mempool *mempool;
-	unsigned long flag;
-
-	spin_lock_irqsave(&pdrv->mempool_lock, flag);
-	mempool = __try_and_hold_drv_mempool(pdrv, type, buf_sz, buf_cnt);
-	spin_unlock_irqrestore(&pdrv->mempool_lock, flag);
-
-	return mempool;
-}
-
 static void fsm_dp_mempool_init(struct fsm_dp_mempool *mempool)
 {
 	struct fsm_dp_mem *mem = &mempool->mem;
@@ -486,7 +449,7 @@ cleanup:
 	return NULL;
 }
 
-static void __fsm_dp_mempool_free(struct fsm_dp_mempool *mempool)
+static void fsm_dp_mempool_release(struct fsm_dp_mempool *mempool)
 {
 	if (mempool) {
 		enum fsm_dp_mem_type type = mempool->type;
@@ -505,9 +468,8 @@ struct fsm_dp_mempool *fsm_dp_mempool_alloc(
 	unsigned int buf_sz,
 	unsigned int buf_cnt)
 {
-	struct fsm_dp_mempool *mempool, *drv_mempool;
+	struct fsm_dp_mempool *mempool;
 	unsigned int ring_sz;
-	unsigned long flag;
 
 	if (unlikely(!buf_sz || !buf_cnt || !fsm_dp_mem_type_is_valid(type)))
 		return NULL;
@@ -518,45 +480,46 @@ struct fsm_dp_mempool *fsm_dp_mempool_alloc(
 	if (unlikely(!ring_sz))
 		return NULL;
 
-	drv_mempool = try_and_hold_drv_mempool(
-		pdrv, type, buf_sz, buf_cnt);
-	if (drv_mempool)
-		return drv_mempool;
+	mutex_lock(&pdrv->mempool_lock);
+	mempool = pdrv->mempool[type];
+	if (mempool) {
+		if (buf_sz > mempool->mem.buf_sz ||
+		    buf_cnt > mempool->mem.buf_cnt) {
+			FSM_DP_ERROR(
+				"%s: can't use existing mempool, type=%u\n",
+				__func__, type);
+			mempool = NULL;
+			goto done;
+		}
+		goto mempool_hold;
+	}
 
 	mempool = __fsm_dp_mempool_alloc(pdrv, type, buf_sz, buf_cnt, ring_sz);
 	if (mempool == NULL)
-		return NULL;
+		goto done;
 
-	spin_lock_irqsave(&pdrv->mempool_lock, flag);
-	drv_mempool = __try_and_hold_drv_mempool(
-		pdrv, type, buf_sz, buf_cnt);
-	if (likely(drv_mempool == NULL)) {
-		pdrv->mempool[type] = mempool;
-		__fsm_dp_mempool_hold(mempool);
-	}
-	spin_unlock_irqrestore(&pdrv->mempool_lock, flag);
+	pdrv->mempool[type] = mempool;
+mempool_hold:
+	__fsm_dp_mempool_hold(mempool);
 
-	if (unlikely(drv_mempool)) {
-		__fsm_dp_mempool_free(mempool);
-		return drv_mempool;
-	}
-
+done:
+	mutex_unlock(&pdrv->mempool_lock);
 	return mempool;
 }
 
 void fsm_dp_mempool_free(struct fsm_dp_mempool *mempool)
 {
 	if (mempool) {
-		if (mempool->drv) {
-			struct fsm_dp_drv *pdrv = mempool->drv;
-			unsigned long flag;
+		struct fsm_dp_drv *pdrv = mempool->drv;
+		struct fsm_dp_mempool_task *task = &pdrv->mempool_task;
 
-			spin_lock_irqsave(&pdrv->mempool_lock, flag);
-			pdrv->mempool[mempool->type] = NULL;
-			spin_unlock_irqrestore(&pdrv->mempool_lock, flag);
-		}
-
-		__fsm_dp_mempool_free(mempool);
+		mutex_lock(&pdrv->mempool_lock);
+		pdrv->mempool[mempool->type] = NULL;
+		list_add_tail(&mempool->list, &task->mempool_head);
+		mutex_unlock(&pdrv->mempool_lock);
+		mod_delayed_work(system_wq,
+				 &task->dwork,
+				 FSM_DP_MEMPOOL_RELEASE_DELAY);
 	}
 }
 
@@ -661,4 +624,57 @@ struct fsm_dp_mempool *fsm_dp_find_mempool(
 		}
 	}
 	return NULL;
+}
+
+static void fsm_dp_mempool_release_work(struct work_struct *work)
+{
+	struct fsm_dp_mempool_task *task;
+	struct fsm_dp_drv *pdrv;
+	struct fsm_dp_mempool *mempool;
+
+	task = container_of(to_delayed_work(work),
+			    struct fsm_dp_mempool_task,
+			    dwork);
+	pdrv = container_of(task, struct fsm_dp_drv, mempool_task);
+
+	while (1) {
+		mutex_lock(&pdrv->mempool_lock);
+		mempool = list_first_entry_or_null(&task->mempool_head,
+						   struct fsm_dp_mempool,
+						   list);
+		mutex_unlock(&pdrv->mempool_lock);
+		if (!mempool)
+			break;
+		list_del(&mempool->list);
+		fsm_dp_mempool_release(mempool);
+	}
+}
+
+int fsm_dp_mempool_task_init(struct fsm_dp_mempool_task *task)
+{
+	INIT_LIST_HEAD(&task->mempool_head);
+	INIT_DELAYED_WORK(&task->dwork, fsm_dp_mempool_release_work);
+	return 0;
+}
+
+void fsm_dp_mempool_task_cleanup(struct fsm_dp_mempool_task *task)
+{
+	struct fsm_dp_drv *pdrv = container_of(task,
+					       struct fsm_dp_drv,
+					       mempool_task);
+	struct fsm_dp_mempool *mempool;
+
+	cancel_delayed_work_sync(&task->dwork);
+
+	mutex_lock(&pdrv->mempool_lock);
+	while (1) {
+		mempool = list_first_entry_or_null(&task->mempool_head,
+						   struct fsm_dp_mempool,
+						   list);
+		if (!mempool)
+			break;
+		list_del(&mempool->list);
+		fsm_dp_mempool_release(mempool);
+	}
+	mutex_unlock(&pdrv->mempool_lock);
 }

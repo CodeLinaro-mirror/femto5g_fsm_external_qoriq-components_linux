@@ -564,9 +564,13 @@ static int fsm_dp_core_init(struct fsm_dp_drv *pdrv)
 	struct device *dev = pdrv->dev;
 	int ret;
 
-	spin_lock_init(&pdrv->mempool_lock);
+	mutex_init(&pdrv->mempool_lock);
 
 	of_dma_configure(dev, dev->of_node);
+
+	ret = fsm_dp_mempool_task_init(&pdrv->mempool_task);
+	if (ret)
+		goto exit;
 
 	ret = fsm_dp_rx_init(pdrv);
 	if (ret)
@@ -588,6 +592,7 @@ static void fsm_dp_core_cleanup(struct fsm_dp_drv *pdrv)
 	fsm_dp_rx_cleanup(pdrv);
 	fsm_dp_loopback_cleanup(&pdrv->loopback);
 	fsm_dp_test_cleanup(pdrv);
+	fsm_dp_mempool_task_cleanup(&pdrv->mempool_task);
 	kfree(pdrv);
 }
 
@@ -620,12 +625,11 @@ exit_poll:
 static void fsm_dp_alloc_work(struct work_struct *work)
 {
 	struct fsm_dp_drv *pdrv;
-
-	pdrv = container_of(work, struct fsm_dp_drv, alloc_work);
-
 	const int sleep_ms =  1000;
 	int retry = 60;
 	int ret;
+
+	pdrv = container_of(work, struct fsm_dp_drv, alloc_work);
 
 	do {
 		ret = fsm_dp_mhi_rx_replenish(pdrv);
