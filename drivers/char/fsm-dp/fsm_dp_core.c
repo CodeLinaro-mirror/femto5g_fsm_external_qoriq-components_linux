@@ -378,7 +378,7 @@ void fsm_dp_rx(struct fsm_dp_drv *pdrv, void *addr, unsigned int length)
 
 	msghdr = (struct fsm_dp_msghdr *)addr;
 	if (msghdr->length != length - sizeof(*msghdr)) {
-		FSM_DP_DEBUG("%s: length mismatch, payload=%u total=%u\n",
+		FSM_DP_ERROR("%s: length mismatch, payload=%u total=%u\n",
 			     __func__, msghdr->length, length);
 		pdrv->stats.rx_badmsg++;
 		goto free_rxbuf;
